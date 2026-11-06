@@ -16,6 +16,7 @@ import os
 import select
 import signal
 import socket
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -216,18 +217,34 @@ def run() -> int:
 
 
 def stop() -> int:
-    try:
-        pid = int(PID_PATH.read_text(encoding="utf-8").strip())
-    except (OSError, ValueError):
+    pid = _read_pid()
+    if pid is None or not _is_bridge(pid):
         print("No bridge is running")
         return 0
     try:
         os.kill(pid, signal.SIGTERM)
-        print(f"Stopped bridge (pid {pid})")
     except ProcessLookupError:
-        PID_PATH.unlink()
-        print("No bridge is running (removed a stale pid file)")
+        print("No bridge is running")
+        return 0
+    except PermissionError:
+        print(f"Not allowed to stop the bridge (pid {pid})", file=sys.stderr)
+        return 1
+    print(f"Stopped bridge (pid {pid})")
     return 0
+
+
+def _read_pid() -> Optional[int]:
+    try:
+        pid = int(PID_PATH.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return None
+    return pid if pid > 0 else None  # kill(0) or kill(-1) would signal whole groups of processes
+
+
+def _is_bridge(pid: int) -> bool:
+    """True when `pid` runs bridge.py, so a stale pid file never gets an unrelated process killed."""
+    result = subprocess.run(["ps", "-p", str(pid), "-o", "command="], capture_output=True, text=True, check=False)
+    return result.returncode == 0 and any(os.path.basename(arg) == "bridge.py" for arg in result.stdout.split())
 
 
 def print_once() -> int:
