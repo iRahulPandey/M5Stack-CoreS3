@@ -12,9 +12,10 @@ BOOT_APP0="$HOME/.platformio/packages/framework-arduinoespressif32/tools/partiti
 cd "$(dirname "$0")"
 uvx platformio run
 
-PORT="${CLAUDE_CUBE_PORT:-$(ls /dev/cu.usbmodem* 2>/dev/null | head -n 1)}"
+# Same lookup as the bridge: the first USB serial port with Espressif's vendor id, or CLAUDE_CUBE_PORT.
+PORT="$(cd ../host && /usr/bin/python3 -m claudecube.serial_link || true)"
 if [[ -z "$PORT" ]]; then
-    echo "No cube found on /dev/cu.usbmodem*" >&2
+    echo "No cube found: no Espressif USB serial port (set CLAUDE_CUBE_PORT to choose one)" >&2
     exit 1
 fi
 

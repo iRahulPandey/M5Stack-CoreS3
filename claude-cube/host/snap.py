@@ -84,7 +84,7 @@ def main(argv: list) -> int:
     target = Path(args[0]).expanduser() if args else (STATE_DIR if take_all else DEFAULT_OUT)
     port = find_port()
     if port is None:
-        print("No cube found on /dev/cu.usbmodem*", file=sys.stderr)
+        print("No cube found: no Espressif USB serial port (set CLAUDE_CUBE_PORT to choose one)", file=sys.stderr)
         return 1
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     (target if take_all else target.parent).mkdir(parents=True, exist_ok=True)

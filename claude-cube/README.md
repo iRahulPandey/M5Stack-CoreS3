@@ -103,7 +103,9 @@ been paused.
 native USB right after its stub starts ("No serial data received").
 
 Set `CLAUDE_CUBE_DISABLE=1` (for example in the `env` block of `~/.claude/settings.json`) to make the hook do nothing,
-or `CLAUDE_CUBE_PORT` to pick a serial port other than the first `/dev/cu.usbmodem*`.
+or `CLAUDE_CUBE_PORT` to pick the serial port yourself. Otherwise the bridge, `flash.sh` and `snap.py` use the first
+USB serial port whose device has Espressif's vendor id (0x303a), found with `ioreg`, so other boards and serial
+monitors on other ports are left alone.
 
 ## Install and uninstall
 
