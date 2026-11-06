@@ -118,6 +118,23 @@ void test_should_notice_a_tilt_and_get_used_to_it() {
     TEST_ASSERT_FALSE(m.state().tilted);
 }
 
+void test_should_explain_each_hit() {
+    MotionClassifier m;
+    rest(m, 1000);
+    hit(m, 2.5f, 2);
+    rest(m, 1000);
+    TEST_ASSERT_EQUAL_UINT32(1, m.state().hits);
+    TEST_ASSERT_EQUAL(buddy::HitVerdict::Slap, m.state().lastHitVerdict);
+    TEST_ASSERT_FLOAT_WITHIN(0.2f, 2.4f, m.state().lastHitPeak);
+
+    hit(m, 1.5f, 40);  // a 400 ms push is movement, not a hit (letting go is another long jolt)
+    rest(m, 1000);
+    TEST_ASSERT_TRUE(m.state().hits >= 2);
+    TEST_ASSERT_EQUAL(buddy::HitVerdict::TooLong, m.state().lastHitVerdict);
+    TEST_ASSERT_EQUAL_UINT32(1, m.state().slaps);
+    TEST_ASSERT_EQUAL_STRING("too_long", buddy::hitVerdictName(m.state().lastHitVerdict));
+}
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_should_stay_still_at_rest);
@@ -129,5 +146,6 @@ int main() {
     RUN_TEST(test_should_read_a_hard_shake_as_hard_without_slaps);
     RUN_TEST(test_should_report_tilt_from_gravity);
     RUN_TEST(test_should_notice_a_tilt_and_get_used_to_it);
+    RUN_TEST(test_should_explain_each_hit);
     return UNITY_END();
 }

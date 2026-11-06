@@ -6,14 +6,15 @@ namespace buddy {
 
 namespace {
 
-constexpr const char* NAMES[] = {"idle", "bored", "asleep", "happy", "excited",
-                                 "dizzy", "angry", "surprised", "curious", "loved"};
+constexpr const char* NAMES[] = {"idle",  "bored", "asleep",    "happy",   "excited", "dizzy",
+                                 "angry", "surprised", "curious", "loved", "waving"};
 static_assert(sizeof(NAMES) / sizeof(NAMES[0]) == static_cast<size_t>(Mood::Count), "a name for every mood");
 
 constexpr uint32_t FORCED_REST_MS = 8000;  // how long a forced idle/bored/asleep face is shown
 
 bool interacted(const MoodInputs& in) {
-    return in.shake != ShakeLevel::None || in.slap || in.tap || in.poke || in.stroking || in.handNear || in.tilted;
+    return in.shake != ShakeLevel::None || in.slap || in.tap || in.poke || in.stroking || in.tilted || in.waved ||
+           in.faceVisible || in.faceArrived;
 }
 
 }  // namespace
@@ -76,11 +77,13 @@ Mood MoodEngine::next(const MoodInputs& in, uint32_t nowMs) {
         uint32_t forMs;
     };
     const Trigger triggers[] = {
+        {in.waved, Mood::Waving, _t.wavingMs},
         {in.shake == ShakeLevel::Medium || hard, Mood::Excited, _t.excitedLingerMs},
         {in.shake == ShakeLevel::Gentle, Mood::Happy, _t.happyMs},
         {in.stroking, Mood::Loved, _t.lovedLingerMs},
         {in.poke || in.tap || (_mood == Mood::Asleep && interacted(in)), Mood::Surprised, _t.surprisedMs},
-        {in.handNear || in.tilted, Mood::Curious, _t.curiousLingerMs},
+        {in.faceArrived, Mood::Happy, _t.happyMs},
+        {in.tilted, Mood::Curious, _t.curiousLingerMs},
     };
     for (const Trigger& t : triggers) {
         if (t.when) {
@@ -128,6 +131,7 @@ uint32_t MoodEngine::durationOf(Mood mood) const {
         case Mood::Surprised: return _t.surprisedMs;
         case Mood::Curious: return _t.curiousLingerMs;
         case Mood::Loved: return _t.lovedLingerMs;
+        case Mood::Waving: return _t.wavingMs;
         default: return FORCED_REST_MS;
     }
 }

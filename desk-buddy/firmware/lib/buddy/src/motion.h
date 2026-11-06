@@ -6,6 +6,11 @@ namespace buddy {
 
 enum class ShakeLevel : uint8_t { None, Gentle, Medium, Hard };
 
+// Why each jolt did or did not count, for tuning against real slaps.
+enum class HitVerdict : uint8_t { Tap, Slap, TooLong, NotQuietBefore, DuringShake, FollowedByMotion };
+
+const char* hitVerdictName(HitVerdict verdict);
+
 struct MotionState {
     ShakeLevel shake = ShakeLevel::None;
     float energy = 0.0f;  // smoothed movement on top of gravity, in g
@@ -16,6 +21,10 @@ struct MotionState {
     bool tilted = false;  // leaned more than ~25 degrees from its usual pose
     uint32_t slaps = 0;   // event counters: a change since the last read means a new event
     uint32_t taps = 0;
+    uint32_t hits = 0;    // every judged jolt, with the latest one's details below
+    float lastHitPeak = 0.0f;
+    uint16_t lastHitMs = 0;
+    HitVerdict lastHitVerdict = HitVerdict::Tap;
 };
 
 // Turns raw accelerometer samples into shake strength, tilt, and one-off slaps and taps.
@@ -31,6 +40,8 @@ private:
     void trackJolts(float dynamic, uint32_t nowMs);
     void trackShake(uint32_t nowMs);
     void classifyImpact(uint32_t nowMs);
+    void record(HitVerdict verdict, float peak, uint32_t durationMs);
+    void dropCandidate();
 
     MotionState _state;
     bool _started = false;
@@ -47,6 +58,7 @@ private:
 
     bool _candidate = false;  // a short jolt waiting to prove it was isolated
     uint32_t _candidateStartMs = 0;
+    uint32_t _candidateMs = 0;
     float _candidatePeak = 0.0f;
 
     bool _energyAbove = false;

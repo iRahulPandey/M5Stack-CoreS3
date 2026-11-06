@@ -122,7 +122,7 @@ void test_should_only_be_excited_by_a_short_hard_shake() {
     TEST_ASSERT_EQUAL(Mood::Excited, e.mood());
 }
 
-void test_should_feel_loved_while_stroked_and_curious_when_a_hand_is_near() {
+void test_should_feel_loved_while_stroked_and_curious_when_tilted() {
     MoodEngine e;
     MoodInputs stroke;
     stroke.stroking = true;
@@ -130,10 +130,66 @@ void test_should_feel_loved_while_stroked_and_curious_when_a_hand_is_near() {
     TEST_ASSERT_EQUAL(Mood::Loved, e.mood());
 
     MoodEngine e2;
-    MoodInputs hand;
-    hand.handNear = true;
-    hold(e2, hand, 300);
+    MoodInputs tilt;
+    tilt.tilted = true;
+    hold(e2, tilt, 300);
     TEST_ASSERT_EQUAL(Mood::Curious, e2.mood());
+}
+
+MoodInputs waved() { MoodInputs in; in.waved = true; in.faceVisible = true; return in; }
+
+void test_should_wave_back_when_someone_waves() {
+    MoodTimings t;
+    MoodEngine e(t);
+    once(e, waved());
+    TEST_ASSERT_EQUAL(Mood::Waving, e.mood());
+    wait(e, t.wavingMs - 2 * STEP_MS);
+    TEST_ASSERT_EQUAL(Mood::Waving, e.mood());
+    wait(e, 3 * STEP_MS);
+    TEST_ASSERT_EQUAL(Mood::Idle, e.mood());
+}
+
+void test_should_ignore_a_wave_while_angry() {
+    MoodEngine e;
+    once(e, slap());
+    once(e, waved());
+    TEST_ASSERT_EQUAL(Mood::Angry, e.mood());
+}
+
+void test_should_let_a_slap_interrupt_a_wave() {
+    MoodEngine e;
+    once(e, waved());
+    once(e, slap());
+    TEST_ASSERT_EQUAL(Mood::Angry, e.mood());
+}
+
+void test_should_be_happy_when_someone_arrives() {
+    MoodEngine e;
+    MoodInputs arrive;
+    arrive.faceArrived = true;
+    arrive.faceVisible = true;
+    once(e, arrive);
+    TEST_ASSERT_EQUAL(Mood::Happy, e.mood());
+}
+
+void test_should_not_get_bored_while_someone_is_there() {
+    MoodTimings t;
+    MoodEngine e(t);
+    MoodInputs company;
+    company.faceVisible = true;
+    hold(e, company, t.asleepAfterMs + 1000);
+    TEST_ASSERT_EQUAL(Mood::Idle, e.mood());
+}
+
+void test_should_wake_up_surprised_when_someone_arrives() {
+    MoodTimings t;
+    MoodEngine e(t);
+    wait(e, t.asleepAfterMs + STEP_MS);
+    MoodInputs arrive;
+    arrive.faceArrived = true;
+    arrive.faceVisible = true;
+    once(e, arrive);
+    TEST_ASSERT_EQUAL(Mood::Surprised, e.mood());
 }
 
 void test_should_be_surprised_by_a_bump() {
@@ -182,7 +238,13 @@ int main() {
     RUN_TEST(test_should_be_excited_then_happy_then_idle_after_a_medium_shake);
     RUN_TEST(test_should_get_dizzy_from_a_long_hard_shake_and_stay_dizzy);
     RUN_TEST(test_should_only_be_excited_by_a_short_hard_shake);
-    RUN_TEST(test_should_feel_loved_while_stroked_and_curious_when_a_hand_is_near);
+    RUN_TEST(test_should_feel_loved_while_stroked_and_curious_when_tilted);
+    RUN_TEST(test_should_wave_back_when_someone_waves);
+    RUN_TEST(test_should_ignore_a_wave_while_angry);
+    RUN_TEST(test_should_let_a_slap_interrupt_a_wave);
+    RUN_TEST(test_should_be_happy_when_someone_arrives);
+    RUN_TEST(test_should_not_get_bored_while_someone_is_there);
+    RUN_TEST(test_should_wake_up_surprised_when_someone_arrives);
     RUN_TEST(test_should_be_surprised_by_a_bump);
     RUN_TEST(test_should_let_a_slap_interrupt_happiness);
     RUN_TEST(test_should_hold_a_forced_mood_for_its_usual_time);

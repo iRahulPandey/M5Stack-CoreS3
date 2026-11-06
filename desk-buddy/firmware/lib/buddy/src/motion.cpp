@@ -35,6 +35,18 @@ ShakeLevel levelFor(float energy) {
 
 }  // namespace
 
+const char* hitVerdictName(HitVerdict verdict) {
+    switch (verdict) {
+        case HitVerdict::Tap: return "tap";
+        case HitVerdict::Slap: return "slap";
+        case HitVerdict::TooLong: return "too_long";
+        case HitVerdict::NotQuietBefore: return "not_quiet_before";
+        case HitVerdict::DuringShake: return "during_shake";
+        case HitVerdict::FollowedByMotion: return "followed_by_motion";
+    }
+    return "tap";
+}
+
 void MotionClassifier::update(float ax, float ay, float az, uint32_t nowMs) {
     if (!_started) {
         _gx = _rx = ax;
@@ -82,7 +94,7 @@ void MotionClassifier::trackJolts(float dynamic, uint32_t nowMs) {
             _joltStartMs = nowMs;
             _joltPeak = dynamic;
             _below = false;
-            _candidate = false;  // a pending hit followed this soon by more movement was not a hit
+            dropCandidate();  // a pending hit followed this soon by more movement was not a hit
         }
         return;
     }
@@ -98,15 +110,35 @@ void MotionClassifier::trackJolts(float dynamic, uint32_t nowMs) {
     if (nowMs - _belowSinceMs < JOLT_RELEASE_MS) return;
 
     _inJolt = false;
+    uint32_t durationMs = _belowSinceMs - _joltStartMs;
     bool quietBefore = !_hadJolt || _joltStartMs - _lastJoltEndMs >= QUIET_BEFORE_MS;
-    bool short_ = _belowSinceMs - _joltStartMs <= IMPACT_MAX_MS;
     _hadJolt = true;
     _lastJoltEndMs = _belowSinceMs;
-    if (short_ && quietBefore && _state.shake == ShakeLevel::None) {
+    if (durationMs > IMPACT_MAX_MS) {
+        record(HitVerdict::TooLong, _joltPeak, durationMs);
+    } else if (!quietBefore) {
+        record(HitVerdict::NotQuietBefore, _joltPeak, durationMs);
+    } else if (_state.shake != ShakeLevel::None) {
+        record(HitVerdict::DuringShake, _joltPeak, durationMs);
+    } else {
         _candidate = true;
         _candidateStartMs = _joltStartMs;
+        _candidateMs = durationMs;
         _candidatePeak = _joltPeak;
     }
+}
+
+void MotionClassifier::record(HitVerdict verdict, float peak, uint32_t durationMs) {
+    _state.hits++;
+    _state.lastHitVerdict = verdict;
+    _state.lastHitPeak = peak;
+    _state.lastHitMs = static_cast<uint16_t>(durationMs > 0xFFFF ? 0xFFFF : durationMs);
+}
+
+void MotionClassifier::dropCandidate() {
+    if (!_candidate) return;
+    _candidate = false;
+    record(HitVerdict::FollowedByMotion, _candidatePeak, _candidateMs);
 }
 
 void MotionClassifier::trackShake(uint32_t nowMs) {
@@ -116,7 +148,7 @@ void MotionClassifier::trackShake(uint32_t nowMs) {
         _energyAbove = above;
         if (above && nowMs - _energyAboveSinceMs >= SHAKE_START_MS) {
             _state.shake = levelFor(_state.energy);
-            _candidate = false;
+            dropCandidate();
             _quiet = false;
         }
         return;
@@ -139,11 +171,14 @@ void MotionClassifier::trackShake(uint32_t nowMs) {
 void MotionClassifier::classifyImpact(uint32_t nowMs) {
     if (!_candidate || nowMs - _candidateStartMs < QUIET_AFTER_MS) return;
     _candidate = false;
-    if (_state.shake != ShakeLevel::None) return;
-    if (_candidatePeak >= SLAP_G) {
+    if (_state.shake != ShakeLevel::None) {
+        record(HitVerdict::DuringShake, _candidatePeak, _candidateMs);
+    } else if (_candidatePeak >= SLAP_G) {
         _state.slaps++;
+        record(HitVerdict::Slap, _candidatePeak, _candidateMs);
     } else {
         _state.taps++;
+        record(HitVerdict::Tap, _candidatePeak, _candidateMs);
     }
 }
 

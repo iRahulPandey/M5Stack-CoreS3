@@ -6,7 +6,7 @@
 
 namespace buddy {
 
-enum class Mood : uint8_t { Idle, Bored, Asleep, Happy, Excited, Dizzy, Angry, Surprised, Curious, Loved, Count };
+enum class Mood : uint8_t { Idle, Bored, Asleep, Happy, Excited, Dizzy, Angry, Surprised, Curious, Loved, Waving, Count };
 
 const char* moodName(Mood mood);
 bool moodFromName(const char* name, Mood& out);
@@ -16,9 +16,11 @@ struct MoodInputs {
     bool slap = false;      // a new slap since the last update
     bool tap = false;       // a new bump since the last update
     bool poke = false;      // the screen was tapped
-    bool stroking = false;  // a finger is sliding on the screen
-    bool handNear = false;  // the proximity sensor sees something close
-    bool tilted = false;    // held well away from upright
+    bool stroking = false;     // a finger is sliding on the screen
+    bool tilted = false;       // held well away from upright
+    bool waved = false;        // the camera saw someone wave since the last update
+    bool faceVisible = false;  // the camera sees a face right now: someone is keeping it company
+    bool faceArrived = false;  // a face appeared after nobody was there for a while
 };
 
 struct MoodTimings {
@@ -35,6 +37,7 @@ struct MoodTimings {
     uint32_t surprisedMs = 1200;
     uint32_t lovedLingerMs = 2000;
     uint32_t curiousLingerMs = 1000;
+    uint32_t wavingMs = 2500;
 };
 
 // Decides how the buddy feels from what is happening to it and how long it has been left alone.
