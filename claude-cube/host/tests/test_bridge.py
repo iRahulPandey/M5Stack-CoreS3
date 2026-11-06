@@ -304,3 +304,48 @@ class TestMalformedInput:
             for now in (1_000.0, 1_000.5, 1_000.0 + bridge.ERROR_LOG_INTERVAL_S):
                 loop.tick(now)
         assert [r.getMessage() for r in caplog.records].count("Tick failed; carrying on") == 2
+
+
+class TestRun:
+    @pytest.fixture
+    def signals(self, monkeypatch: pytest.MonkeyPatch) -> dict:
+        handlers: dict = {}
+        monkeypatch.setattr(bridge.signal, "signal", lambda sig, handler: handlers.__setitem__(sig, handler))
+        monkeypatch.setattr(bridge, "SerialLink", FakeLink)
+        return handlers
+
+    def test_should_tick_until_stopped_then_clean_up(self, state_dir: Path, signals: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+        ticks: list = []
+
+        def wait(readable: list, writable: list, failed: list, timeout: float) -> tuple:
+            ticks.append(timeout)
+            if len(ticks) == 3:
+                signals[signal.SIGTERM](signal.SIGTERM, None)
+            return [], [], []
+
+        monkeypatch.setattr(bridge.select, "select", wait)
+        assert bridge.run() == 0
+        assert ticks == [bridge.TICK_S] * 3
+        assert not bridge.SOCKET_PATH.exists()
+        assert not bridge.PID_PATH.exists()
+        assert json.loads(bridge.LAST_FRAME_PATH.read_text(encoding="utf-8"))["st"] == "idle"
+
+    def test_should_exit_after_the_idle_timeout(self, state_dir: Path, signals: dict, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(bridge.select, "select", lambda *args: ([], [], []))
+        monkeypatch.setattr(bridge, "IDLE_EXIT_S", -1)
+        assert bridge.run() == 0
+
+    def test_should_leave_the_running_bridge_alone(self, running: "bridge.Claim", signals: dict) -> None:
+        assert bridge.run() == 0
+        assert signals == {}
+        assert bridge.SOCKET_PATH.exists()
+
+
+class TestPrintOnce:
+    def test_should_print_the_newest_sessions_frame(self, state_dir: Path, capsys: pytest.CaptureFixture) -> None:
+        project = Path("projects") / "-Users-rahulpandey-Projects-issuetriage"
+        project.mkdir(parents=True)
+        (project / "0d07bbb1.jsonl").write_text(json.dumps({"type": "custom-title", "customTitle": "Cube fixes"}) + "\n", encoding="utf-8")
+        assert bridge.main(["--print"]) == 0
+        frame = json.loads(capsys.readouterr().out)
+        assert (frame["st"], frame["title"]) == ("idle", "Cube fixes")
