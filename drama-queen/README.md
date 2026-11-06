@@ -43,10 +43,11 @@ to five lines and never repeats the last one.
 - **Motion, 100 times a second** on core 0 (`lib/drama/src/motion`), separated into gravity and movement:
   - *In the air*: total acceleration under 0.35 g for 100 ms. Landing is when it comes back.
   - *Face down / on her back*: gravity along the screen's outward axis below -0.8 / above 0.8.
-  - *Slap*: a spike of at least 2 g that the ringing after it never matches again (judged 200 ms in), not during a
-    shake and not the thud of a landing. This came from real slaps on this board: they peaked at 2.4 to 7.2 g but
-    the cube kept rocking or was held for up to 2 s afterwards, so "a short, isolated jolt" missed all of them. A hard
-    shake swings back just as strongly, which is how it is told apart.
+  - *Slap*: a spike of at least 2 g, judged on its own 300 ms in, whatever else is moving. Nothing in the 300 ms
+    before its rise or after its fall may reach 60% of it, and it must not be the thud of a landing. This came from
+    real slaps on this board: they peaked at 2.4 to 7.2 g, but she was often already moving in a hand and kept
+    rocking for up to 2 s afterwards, so "a short, isolated jolt" missed them. A hard shake always has a swing as
+    strong next to it, which is how it is told apart; a very fast flurry of slaps reads as a shake too.
   - *Tap*: a short, isolated jolt under 2 g (real taps: 0.5 to 0.8 g, 50 to 80 ms).
   - *Shake* graded by smoothed energy; *tilt* against the pose she usually sits in, relearned over ~20 s;
     *pick-up* is movement after at least 3 s of rest.
