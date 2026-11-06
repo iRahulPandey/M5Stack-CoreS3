@@ -2,7 +2,9 @@
 """Talk to desk buddy over USB serial.
 
   buddy.py status              what it feels and senses right now (JSON)
-  buddy.py mood NAME           show a mood now: idle bored asleep happy excited dizzy angry surprised curious loved
+  buddy.py hits                the last 16 jolts: peak g, duration, and whether they counted as tap or slap
+  buddy.py mood NAME           show a mood now: idle bored asleep happy excited dizzy angry surprised curious
+                               loved waving
   buddy.py gallery DIR         screenshot every mood to DIR/mood-<name>.png
 
 Keeps the claude-cube bridge paused (~/.claude-cube/paused) so it does not write into this firmware.
@@ -22,7 +24,7 @@ from typing import Callable, Optional
 
 REPO = Path(__file__).resolve().parents[2]
 PAUSE_PATH = Path.home() / ".claude-cube" / "paused"
-MOODS = ["idle", "bored", "asleep", "happy", "excited", "dizzy", "angry", "surprised", "curious", "loved"]
+MOODS = ["idle", "bored", "asleep", "happy", "excited", "dizzy", "angry", "surprised", "curious", "loved", "waving"]
 READ_TIMEOUT_S = 1.5
 ATTEMPTS = 3  # the board occasionally drops a command while it is busy pushing a frame
 SETTLE_S = 0.8  # let the eyes ease into the new pose before the screenshot
@@ -81,6 +83,10 @@ def status(fd: int) -> dict:
     return json.loads(line_after(ask(fd, b"status", b"STATUS "), b"STATUS "))
 
 
+def hits(fd: int) -> list:
+    return json.loads(line_after(ask(fd, b"hits", b"HITS "), b"HITS "))
+
+
 def snap(fd: int) -> bytes:
     sys.path.insert(0, str(REPO / "claude-cube" / "host"))  # reuse claude-cube's tested PNG encoder
     from claudecube.snapshot import rgb565_to_png
@@ -108,7 +114,8 @@ def gallery(fd: int, out_dir: Path) -> None:
 
 
 def main(argv: list) -> int:
-    if not argv or argv[0] not in ("status", "mood", "gallery") or (argv[0] != "status" and len(argv) < 2):
+    needs_arg = argv and argv[0] in ("mood", "gallery")
+    if not argv or argv[0] not in ("status", "hits", "mood", "gallery") or (needs_arg and len(argv) < 2):
         print(__doc__, file=sys.stderr)
         return 2
     port = find_port()
@@ -122,6 +129,9 @@ def main(argv: list) -> int:
     try:
         if argv[0] == "status":
             print(json.dumps(status(fd), indent=2))
+        elif argv[0] == "hits":
+            for h in hits(fd):
+                print(f"{h['agoS']:>5}s ago  peak {h['peak']:.2f} g  {h['ms']:>4} ms  {h['verdict']}")
         elif argv[0] == "mood":
             if argv[1] not in MOODS:
                 print(f"unknown mood {argv[1]!r}; one of: {' '.join(MOODS)}", file=sys.stderr)

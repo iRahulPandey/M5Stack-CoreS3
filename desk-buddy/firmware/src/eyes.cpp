@@ -27,6 +27,11 @@ constexpr float LEAN_LOOK_X = 70.0f;     // how far the eyes roll toward a tilt
 constexpr float LEAN_LOOK_Y = 40.0f;
 constexpr float MAX_LOOK_X = 45.0f;
 constexpr float MAX_LOOK_Y = 30.0f;
+// The camera sees you un-mirrored (your left is on the image's right), and the screen faces you,
+// so the eyes move opposite to your position in the image to look at you. Flip if they look away.
+constexpr float FACE_LOOK_SIGN = -1.0f;
+constexpr float FACE_LOOK_X = 45.0f;
+constexpr float FACE_LOOK_Y = 25.0f;
 
 uint32_t randomBetween(uint32_t lo, uint32_t hi) {
     return lo + esp_random() % (hi - lo);
@@ -102,6 +107,30 @@ void drawHeart(M5Canvas& c, float cx, float cy, float s) {
                    lroundf(cy + s * 1.15f), theme::LOVE);
 }
 
+// A cartoon hand by the bottom-right corner, rocking from the wrist.
+void drawWavingHand(M5Canvas& c, uint32_t nowMs) {
+    constexpr float WRIST_X = 268.0f, WRIST_Y = 236.0f;
+    float a = (-18.0f + 22.0f * wave(nowMs, 500)) * PI_F / 180.0f;
+    // hand space: `along` points from the wrist to the fingertips, `across` to the hand's right
+    auto at = [&](float along, float across, float& x, float& y) {
+        x = WRIST_X + along * sinf(a) + across * cosf(a);
+        y = WRIST_Y - along * cosf(a) + across * sinf(a);
+    };
+    float x0, y0, x1, y1;
+    at(14, 0, x1, y1);
+    c.drawWideLine(WRIST_X, WRIST_Y, x1, y1, 10.0f, theme::EYE);
+    at(40, 0, x0, y0);
+    c.fillCircle(lroundf(x0), lroundf(y0), 22, theme::EYE);
+    for (float s : {-15.0f, -5.0f, 5.0f, 15.0f}) {
+        at(52, s, x0, y0);
+        at(78, s * 1.25f, x1, y1);
+        c.drawWideLine(x0, y0, x1, y1, 5.5f, theme::EYE);
+    }
+    at(36, -18, x0, y0);
+    at(50, -36, x1, y1);
+    c.drawWideLine(x0, y0, x1, y1, 5.5f, theme::EYE);
+}
+
 void drawAsleep(M5Canvas& c, uint32_t nowMs) {
     float breathe = 1.0f + 0.06f * wave(nowMs, 3200);
     for (float side : {-1.0f, 1.0f}) {
@@ -137,6 +166,12 @@ Eyes::Pose Eyes::targetFor(Mood mood) const {
         case Mood::Curious: p.leftScale = 1.15f; p.rightScale = 0.86f; break;
         default: break;
     }
+    bool watchesYou = _faceVisible && mood != Mood::Asleep && mood != Mood::Dizzy && mood != Mood::Excited;
+    if (watchesYou) {  // look straight at the person instead of glancing around
+        p.lookX = clampf(FACE_LOOK_SIGN * _faceX * FACE_LOOK_X, MAX_LOOK_X);
+        p.lookY = clampf(_faceY * FACE_LOOK_Y, MAX_LOOK_Y);
+        return p;
+    }
     if (mood == Mood::Idle) {
         p.lookX = _glanceX;
         p.lookY = _glanceY;
@@ -148,11 +183,14 @@ Eyes::Pose Eyes::targetFor(Mood mood) const {
     return p;
 }
 
-void Eyes::update(const buddy::MotionState& motion, uint32_t nowMs) {
+void Eyes::update(const buddy::MotionState& motion, const CameraState& camera, uint32_t nowMs) {
     _energy = motion.energy;
     _leanX = motion.leanX;
     _leanY = motion.leanY;
-    updateGlance(nowMs);
+    _faceVisible = camera.faceVisible;
+    _faceX = camera.faceX;
+    _faceY = camera.faceY;
+    if (!_faceVisible) updateGlance(nowMs);
     updateBlink(nowMs);
     Pose t = targetFor(_mood);
     _pose.w = approach(_pose.w, t.w);
@@ -223,10 +261,12 @@ void Eyes::drawExcited(M5Canvas& c, uint32_t nowMs) const {
 void Eyes::draw(M5Canvas& c, uint32_t nowMs) const {
     c.fillScreen(theme::BLACK);
     switch (_mood) {
-        case Mood::Happy: {
+        case Mood::Happy:
+        case Mood::Waving: {
             float dy = 4.0f * wave(nowMs, 600);
-            drawHappyEye(c, CENTER_X - HALF_GAP, CENTER_Y + dy);
-            drawHappyEye(c, CENTER_X + HALF_GAP, CENTER_Y + dy);
+            drawHappyEye(c, CENTER_X - HALF_GAP + _pose.lookX, CENTER_Y + _pose.lookY + dy);
+            drawHappyEye(c, CENTER_X + HALF_GAP + _pose.lookX, CENTER_Y + _pose.lookY + dy);
+            if (_mood == Mood::Waving) drawWavingHand(c, nowMs);
             break;
         }
         case Mood::Dizzy: {

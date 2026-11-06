@@ -18,6 +18,7 @@ constexpr Note SURPRISED[] = {{660, 50}, {1320, 110}};
 constexpr Note LOVED[] = {{523, 120}, {659, 120}, {784, 200}};
 constexpr Note BORED[] = {{494, 180}, {392, 280}};
 constexpr Note CURIOUS[] = {{880, 60}, {1175, 90}};
+constexpr Note WAVING[] = {{784, 90}, {1047, 160}, {1319, 90}};  // "hi-i!"
 
 template <size_t N>
 constexpr size_t countOf(const Note (&)[N]) {
@@ -36,6 +37,7 @@ void Voice::play(Mood mood) {
         case Mood::Loved: _notes = LOVED; _count = countOf(LOVED); break;
         case Mood::Bored: _notes = BORED; _count = countOf(BORED); break;
         case Mood::Curious: _notes = CURIOUS; _count = countOf(CURIOUS); break;
+        case Mood::Waving: _notes = WAVING; _count = countOf(WAVING); break;
         default: _notes = nullptr; _count = 0; break;  // idle and asleep stay quiet
     }
     _next = 0;

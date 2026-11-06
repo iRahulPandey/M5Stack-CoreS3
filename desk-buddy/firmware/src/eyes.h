@@ -2,15 +2,17 @@
 
 #include <M5Unified.h>
 
+#include "camera.h"
 #include "mood.h"
 #include "motion.h"
 
-// The buddy's face: two eyes that ease between poses, blink, glance around,
-// and switch to arcs, spirals, hearts or closed lids for some moods.
+// The buddy's face: two eyes that ease between poses, blink, look at your face when the camera
+// sees one (and glance around when it does not), and switch to arcs, spirals, hearts, closed lids
+// or a waving hand for some moods.
 class Eyes {
 public:
     void setMood(buddy::Mood mood, uint32_t nowMs);
-    void update(const buddy::MotionState& motion, uint32_t nowMs);
+    void update(const buddy::MotionState& motion, const CameraState& camera, uint32_t nowMs);
     void draw(M5Canvas& canvas, uint32_t nowMs) const;
 
 private:
@@ -39,4 +41,6 @@ private:
     bool _blinking = false;
     float _energy = 0.0f;
     float _leanX = 0.0f, _leanY = 0.0f;
+    bool _faceVisible = false;
+    float _faceX = 0.0f, _faceY = 0.0f;
 };
