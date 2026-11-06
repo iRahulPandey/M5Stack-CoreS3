@@ -1,0 +1,129 @@
+{
+  "v": 1,
+  "ms": 10150,
+  "checks": [
+    {
+      "name": "Chip",
+      "status": "pass",
+      "detail": "ESP32-S3, 2 cores, 240 MHz, 16 MB flash"
+    },
+    {
+      "name": "Board",
+      "status": "pass",
+      "detail": "M5Stack CoreS3"
+    },
+    {
+      "name": "PSRAM",
+      "status": "pass",
+      "detail": "8189 KB total, 8039 KB free"
+    },
+    {
+      "name": "PMIC AXP2101",
+      "status": "pass",
+      "detail": "ACK at 0x34"
+    },
+    {
+      "name": "Amp AW88298",
+      "status": "pass",
+      "detail": "ACK at 0x36"
+    },
+    {
+      "name": "Touch FT6336U",
+      "status": "pass",
+      "detail": "0x38, id 0x64 (expect 0x64)"
+    },
+    {
+      "name": "Codec ES7210",
+      "status": "pass",
+      "detail": "ACK at 0x40"
+    },
+    {
+      "name": "RTC BM8563",
+      "status": "pass",
+      "detail": "ACK at 0x51"
+    },
+    {
+      "name": "IO exp AW9523B",
+      "status": "pass",
+      "detail": "0x58, id 0x23 (expect 0x23)"
+    },
+    {
+      "name": "IMU BMI270",
+      "status": "pass",
+      "detail": "0x69, id 0x24 (expect 0x24)"
+    },
+    {
+      "name": "Light LTR-553",
+      "status": "pass",
+      "detail": "0x23, id 0x92 (expect 0x92)"
+    },
+    {
+      "name": "Camera GC0308",
+      "status": "pass",
+      "detail": "0x21, id 0x9B (expect 0x9B)"
+    },
+    {
+      "name": "Other I2C",
+      "status": "info",
+      "detail": "none"
+    },
+    {
+      "name": "IMU motion",
+      "status": "pass",
+      "detail": "1.00 g, 0.3 dps"
+    },
+    {
+      "name": "Compass BMM150",
+      "status": "pass",
+      "detail": "|B| 396.6 (x -231.6 y -33.6 z 320.1)"
+    },
+    {
+      "name": "RTC",
+      "status": "warn",
+      "detail": "no valid time (clock lost power?)"
+    },
+    {
+      "name": "Battery",
+      "status": "warn",
+      "detail": "none? reads 655 mV, USB 5149 mV"
+    },
+    {
+      "name": "Speaker",
+      "status": "pass",
+      "detail": "880 Hz beep played (listen)"
+    },
+    {
+      "name": "Microphones",
+      "status": "pass",
+      "detail": "rms 188, peak 4123"
+    },
+    {
+      "name": "Wi-Fi radio",
+      "status": "pass",
+      "detail": "4 networks, best -63 dBm"
+    }
+  ],
+  "i2c": [
+    33,
+    35,
+    52,
+    54,
+    56,
+    64,
+    81,
+    88,
+    105
+  ],
+  "bench": {
+    "sram_read": 223.2,
+    "psram_read": 27.2,
+    "psram_read_2core": 27.7,
+    "psram_write": 14.4,
+    "flash_read": 25.1
+  },
+  "e01": {
+    "bandwidth": 27.7,
+    "int8_3m3_tok_s": 8.4,
+    "fp32_260k_tok_s": 26.7
+  }
+}
