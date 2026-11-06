@@ -7,6 +7,7 @@ a 320 × 240 touch screen, camera, IMU, microphones and speaker, on native USB.
 |---|---|
 | [claude-cube](claude-cube/) | Shows your current Claude Code session on the cube: tokens, model, context window, what Claude is doing, cost. Shake to flip pages; it chimes when Claude needs you. |
 | [smoke-test](smoke-test/) | Checks that every part answers and measures memory bandwidth: 27.7 MB/s from PSRAM, which caps a 3.3M INT8 LLM at 8.4 tok/s. |
+| [desk-buddy](desk-buddy/) | Two expressive eyes that react to how you treat the cube: shake it, slap it, stroke it, tilt it, or leave it alone. Ten animated moods with sounds. |
 
 ## Working with the board
 
