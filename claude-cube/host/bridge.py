@@ -8,6 +8,8 @@ Started on demand by hook.py and exits after a few idle hours. Commands:
 """
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import logging
 import os
@@ -16,6 +18,7 @@ import signal
 import socket
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, Optional
 
@@ -42,6 +45,7 @@ FALLBACK_MAX_AGE_S = 24 * 3600
 FALLBACK_RESCAN_S = 10.0
 MAX_READERS = 8
 MAX_DATAGRAM = 8192
+NO_BRIDGE_ERRNOS = {errno.ECONNREFUSED, errno.ENOENT}  # same rule as hook.py: anything else means a bridge is there
 
 
 class TranscriptPicker:
@@ -73,21 +77,75 @@ class TranscriptPicker:
         return self._fallback
 
 
-def bind_socket() -> Optional[socket.socket]:
-    """Bind the event socket, or return None when another bridge already owns it."""
+@dataclass(frozen=True)
+class Claim:
+    """This process is the running bridge: it holds the pid file lock and the event socket."""
+
+    sock: socket.socket
+    lock_fd: int
+    socket_inode: int
+
+    def release(self) -> None:
+        """Close up, removing the socket and pid file only if a newer bridge has not replaced them."""
+        self.sock.close()
+        if _inode(SOCKET_PATH) == self.socket_inode:
+            SOCKET_PATH.unlink(missing_ok=True)
+        if _inode(PID_PATH) == os.fstat(self.lock_fd).st_ino:
+            PID_PATH.unlink(missing_ok=True)
+        os.close(self.lock_fd)
+
+
+def claim() -> Optional[Claim]:
+    """Become the one running bridge, or return None when another bridge already is."""
     STATE_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if SOCKET_PATH.exists():
-        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as probe:
-            try:
-                probe.sendto(b"{}", str(SOCKET_PATH))
-                return None
-            except OSError:
-                SOCKET_PATH.unlink()
-    sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
-    sock.bind(str(SOCKET_PATH))
+    lock_fd = _lock_pid_file()
+    if lock_fd is None:
+        return None
+    try:
+        if _socket_is_live():  # a bridge from before the pid file lock, which holds no lock
+            os.close(lock_fd)
+            return None
+        SOCKET_PATH.unlink(missing_ok=True)
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM)
+        sock.bind(str(SOCKET_PATH))
+    except OSError:
+        os.close(lock_fd)
+        raise
     os.chmod(SOCKET_PATH, 0o600)
     sock.setblocking(False)
-    return sock
+    os.ftruncate(lock_fd, 0)
+    os.write(lock_fd, str(os.getpid()).encode("ascii"))
+    return Claim(sock=sock, lock_fd=lock_fd, socket_inode=os.stat(SOCKET_PATH).st_ino)
+
+
+def _lock_pid_file() -> Optional[int]:
+    fd = os.open(PID_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return None
+    if _inode(PID_PATH) != os.fstat(fd).st_ino:  # an exiting bridge removed the file after we opened it
+        os.close(fd)
+        return None
+    return fd
+
+
+def _socket_is_live() -> bool:
+    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as probe:
+        probe.setblocking(False)
+        try:
+            probe.sendto(b"{}", str(SOCKET_PATH))
+        except OSError as exc:
+            return exc.errno not in NO_BRIDGE_ERRNOS  # a full queue (ENOBUFS) still means someone is reading
+    return True
+
+
+def _inode(path: Path) -> Optional[int]:
+    try:
+        return os.stat(path).st_ino
+    except FileNotFoundError:
+        return None
 
 
 def drain_events(sock: socket.socket, board: SessionBoard) -> int:
@@ -117,11 +175,11 @@ def write_last_frame(frame: dict) -> None:
 
 
 def run() -> int:
-    sock = bind_socket()
-    if sock is None:
+    owner = claim()
+    if owner is None:
         log.info("Another bridge is already running")
         return 0
-    PID_PATH.write_text(str(os.getpid()), encoding="utf-8")
+    sock = owner.sock
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     signal.signal(signal.SIGINT, lambda *_: stopping.append(True))
@@ -152,12 +210,7 @@ def run() -> int:
                     seq, last_sent, last_send_t = seq + 1, significant(frame), now
     finally:
         link.close()
-        sock.close()
-        for path in (SOCKET_PATH, PID_PATH):
-            try:
-                path.unlink()
-            except FileNotFoundError:
-                pass
+        owner.release()
         log.info("Bridge stopped")
     return 0
 
