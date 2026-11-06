@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, NamedTuple, Optional, Set
 
 from claudecube.pricing import DEFAULT_CONTEXT_WINDOW, context_window, message_cost
 
@@ -67,8 +68,7 @@ class TranscriptReader:
 
     def __init__(self, path: Path) -> None:
         self._path = Path(path)
-        self._offset = 0
-        self._partial = b""
+        self._tail = _FileTail(self._path)
         self._acc = _Accumulator()
 
     @property
@@ -76,23 +76,50 @@ class TranscriptReader:
         return self._path
 
     def poll(self) -> TranscriptStats:
-        for line in self._read_new_lines():
+        new = self._tail.read()
+        if new.restarted:
+            self._acc = _Accumulator()
+        for line in new.lines:
             entry = _parse(line)
             if entry is not None:
                 _absorb(self._acc, entry)
         return _snapshot(self._acc)
 
-    def _read_new_lines(self) -> List[bytes]:
+
+class _NewLines(NamedTuple):
+    restarted: bool  # the file was truncated or replaced: forget everything read from it before
+    lines: List[bytes]
+
+
+class _FileTail:
+    """The complete lines appended to a file since the last read."""
+
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._inode: Optional[int] = None
+        self._offset = 0
+        self._partial = b""
+
+    def read(self) -> _NewLines:
         try:
+            if self._unchanged(os.stat(self._path)):
+                return _NewLines(False, [])
             with self._path.open("rb") as fh:
+                info = os.fstat(fh.fileno())
+                restarted = self._inode is not None and (info.st_ino != self._inode or info.st_size < self._offset)
+                if restarted:
+                    self._offset, self._partial = 0, b""
+                self._inode = info.st_ino
                 fh.seek(self._offset)
                 chunk = fh.read()
         except OSError:
-            return []
+            return _NewLines(False, [])
         self._offset += len(chunk)
-        data = self._partial + chunk
-        *lines, self._partial = data.split(b"\n")
-        return lines
+        *lines, self._partial = (self._partial + chunk).split(b"\n")
+        return _NewLines(restarted, lines)
+
+    def _unchanged(self, info: os.stat_result) -> bool:
+        return info.st_ino == self._inode and info.st_size == self._offset
 
 
 def _parse(line: bytes) -> Optional[dict]:

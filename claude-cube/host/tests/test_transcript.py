@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -176,6 +177,22 @@ class TestIncrementalReads:
     def test_should_skip_malformed_lines(self, transcript: Path) -> None:
         write_lines(transcript, [assistant("msg_a", output_tokens=7)], extra="{not json\n")
         assert TranscriptReader(transcript).poll().output_tokens == 7
+
+    def test_should_start_over_when_the_transcript_is_truncated(self, transcript: Path) -> None:
+        reader = TranscriptReader(transcript)
+        write_lines(transcript, [assistant("msg_a", output_tokens=10), assistant("msg_b", output_tokens=15)])
+        assert reader.poll().output_tokens == 25
+        transcript.write_text(json.dumps(assistant("msg_c", output_tokens=7)) + "\n", encoding="utf-8")
+        assert reader.poll().output_tokens == 7
+
+    def test_should_start_over_when_the_transcript_is_replaced(self, transcript: Path) -> None:
+        reader = TranscriptReader(transcript)
+        write_lines(transcript, [assistant("msg_a", output_tokens=10)])
+        assert reader.poll().output_tokens == 10
+        replacement = transcript.with_name("replacement.jsonl")
+        write_lines(replacement, [assistant(f"msg_{n}", output_tokens=1) for n in range(5)])
+        os.replace(replacement, transcript)
+        assert reader.poll().output_tokens == 5
 
     def test_should_return_empty_stats_for_a_missing_file(self, tmp_path: Path) -> None:
         stats = TranscriptReader(tmp_path / "missing.jsonl").poll()
