@@ -7,6 +7,7 @@ a 320 × 240 touch screen, camera, IMU, microphones and speaker, on native USB.
 |---|---|
 | [claude-cube](claude-cube/) | Shows your current Claude Code session on the cube: tokens, model, context window, what Claude is doing, cost. Shake to flip pages; it chimes when Claude needs you. |
 | [smoke-test](smoke-test/) | Checks that every part answers and measures memory bandwidth: 27.7 MB/s from PSRAM, which caps a 3.3M INT8 LLM at 8.4 tok/s. |
+| [drama-queen](drama-queen/) | A cube that overreacts to everything: screams when tossed, sobs face down, faints on her back, calls her lawyer when slapped. 18 reactions with faces, speech bubbles and a gibberish voice. |
 
 ## Working with the board
 
