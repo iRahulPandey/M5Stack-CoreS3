@@ -4,7 +4,8 @@
 Started on demand by hook.py and exits after a few idle hours. Commands:
   bridge.py            run in the foreground (logs to stderr)
   bridge.py --print    print the frame for the newest session once, then exit
-  bridge.py --stop     stop a running bridge (do this before flashing the cube)
+  bridge.py --status   say whether a bridge is running, whether it is paused, and which port it would use
+  bridge.py --stop     stop a running bridge
 """
 from __future__ import annotations
 
@@ -25,9 +26,9 @@ from typing import Dict, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from claudecube.activity import HookEvent, SessionBoard  # noqa: E402
+from claudecube.activity import HookEvent, SessionActivity, SessionBoard  # noqa: E402
 from claudecube.frame import build_frame, encode_frame, significant  # noqa: E402
-from claudecube.serial_link import SerialLink  # noqa: E402
+from claudecube.serial_link import SerialLink, find_port  # noqa: E402
 from claudecube.transcript import TranscriptReader, TranscriptStats  # noqa: E402
 
 log = logging.getLogger("claude-cube")
@@ -35,7 +36,7 @@ log = logging.getLogger("claude-cube")
 STATE_DIR = Path.home() / ".claude-cube"
 SOCKET_PATH = STATE_DIR / "bridge.sock"
 PID_PATH = STATE_DIR / "bridge.pid"
-PAUSE_PATH = STATE_DIR / "paused"  # firmware/flash.sh creates this so the bridge lets go of the port
+PAUSE_PATH = STATE_DIR / "paused"  # flash.sh and snap.py create this so the bridge lets go of the port
 LAST_FRAME_PATH = STATE_DIR / "last-frame.json"  # what the cube is showing, for debugging without the cube
 PROJECTS_DIR = Path.home() / ".claude" / "projects"
 
@@ -175,40 +176,85 @@ def write_last_frame(frame: dict) -> None:
         log.warning("Cannot write %s: %s", LAST_FRAME_PATH, exc)
 
 
+class FrameSender:
+    """Sends a frame when it changed, on the heartbeat, and straight after the cube (re)connects."""
+
+    def __init__(self, link: SerialLink) -> None:
+        self._link = link
+        self._seq = 0
+        self._last_sent: Optional[dict] = None
+        self._last_send_t = 0.0
+
+    def reset(self) -> None:
+        """Forget what the cube is showing, so the next frame goes out at once."""
+        self._last_sent = None
+
+    def offer(self, activity: Optional[SessionActivity], stats: TranscriptStats, now: float) -> None:
+        frame = build_frame(activity, stats, now, self._seq + 1)
+        key = significant(frame)
+        reconnecting = not self._link.connected  # send straight away after a plug-in or reflash
+        if not (reconnecting or key != self._last_sent or now - self._last_send_t >= HEARTBEAT_S):
+            return
+        write_last_frame(frame)
+        if self._link.write(encode_frame(frame)):
+            self._seq, self._last_sent, self._last_send_t = self._seq + 1, key, now
+
+
+class Bridge:
+    """What the bridge does on each tick: read hook events, pick the session, send its frame."""
+
+    def __init__(self, sock: socket.socket, link: SerialLink) -> None:
+        self._sock = sock
+        self._link = link
+        self._board = SessionBoard()
+        self._picker = TranscriptPicker()
+        self._sender = FrameSender(link)
+        self._paused_since: Optional[float] = None
+        self.last_event_t = time.time()
+
+    def tick(self, now: float) -> None:
+        if drain_events(self._sock, self._board):
+            self.last_event_t = now
+        if self._update_pause(now):
+            return
+        activity = self._board.active()
+        stats = self._picker.stats(activity.transcript_path if activity else "", now)
+        self._sender.offer(activity, stats, now)
+
+    def _update_pause(self, now: float) -> bool:
+        """True while paused. Logs each change: a leftover pause file would otherwise blank the cube silently."""
+        paused = PAUSE_PATH.exists()
+        if paused and self._paused_since is None:
+            log.info("Paused while %s exists: the serial port is free for other tools", PAUSE_PATH)
+            self._link.close()
+            self._sender.reset()
+            self._paused_since = now
+        elif not paused and self._paused_since is not None:
+            log.info("Resumed after %d min paused", max(now - self._paused_since, 0) // 60)
+            self._paused_since = None
+        return paused
+
+
 def run() -> int:
     owner = claim()
     if owner is None:
         log.info("Another bridge is already running")
         return 0
-    sock = owner.sock
     stopping = []
     signal.signal(signal.SIGTERM, lambda *_: stopping.append(True))
     signal.signal(signal.SIGINT, lambda *_: stopping.append(True))
 
-    board, picker, link = SessionBoard(), TranscriptPicker(), SerialLink()
-    seq, last_sent, last_send_t, last_event_t = 0, None, 0.0, time.time()
+    link = SerialLink()
+    loop = Bridge(owner.sock, link)
     log.info("Bridge started (pid %d)", os.getpid())
     try:
         while not stopping:
-            select.select([sock], [], [], TICK_S)
+            select.select([owner.sock], [], [], TICK_S)
             now = time.time()
-            if drain_events(sock, board):
-                last_event_t = now
-            if now - last_event_t > IDLE_EXIT_S:
+            loop.tick(now)
+            if now - loop.last_event_t > IDLE_EXIT_S:
                 log.info("No Claude Code activity for %d hours, exiting", IDLE_EXIT_S // 3600)
                 break
-            if PAUSE_PATH.exists():
-                link.close()
-                last_sent = None
-                continue
-            activity = board.active()
-            stats = picker.stats(activity.transcript_path if activity else "", now)
-            frame = build_frame(activity, stats, now, seq + 1)
-            reconnecting = not link.connected  # send straight away after a plug-in or reflash
-            if reconnecting or significant(frame) != last_sent or now - last_send_t >= HEARTBEAT_S:
-                write_last_frame(frame)
-                if link.write(encode_frame(frame)):
-                    seq, last_sent, last_send_t = seq + 1, significant(frame), now
     finally:
         link.close()
         owner.release()
@@ -247,6 +293,25 @@ def _is_bridge(pid: int) -> bool:
     return result.returncode == 0 and any(os.path.basename(arg) == "bridge.py" for arg in result.stdout.split())
 
 
+def status() -> int:
+    pid = _read_pid()
+    running = pid is not None and _is_bridge(pid)
+    print(f"bridge: running (pid {pid})" if running else "bridge: not running")
+    print(_pause_status(time.time()))
+    port = find_port()
+    print(f"port: {port}" if port else "port: no cube found")
+    return 0
+
+
+def _pause_status(now: float) -> str:
+    try:
+        since = PAUSE_PATH.stat().st_mtime
+    except FileNotFoundError:
+        return "paused: no"
+    minutes = int(max(now - since, 0)) // 60
+    return f"paused: yes, for {minutes} min ({PAUSE_PATH} exists; delete it to resume)"
+
+
 def print_once() -> int:
     stats = TranscriptPicker().stats("", time.time())
     print(json.dumps(build_frame(None, stats, time.time(), 0), indent=2))
@@ -257,6 +322,8 @@ def main(argv: list) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     if "--stop" in argv:
         return stop()
+    if "--status" in argv:
+        return status()
     if "--print" in argv:
         return print_once()
     return run()

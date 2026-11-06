@@ -83,12 +83,21 @@ firmware/flash.sh
 # What the cube is showing right now, without the cube
 cat ~/.claude-cube/last-frame.json
 
+# Is the bridge running or paused, and which port would it use?
+/usr/bin/python3 host/bridge.py --status
+
 # Stop the bridge (the next hook event starts it again)
 /usr/bin/python3 host/bridge.py --stop
 
 # Host tests
 cd host && uvx --python /usr/bin/python3 pytest -q
 ```
+
+While `~/.claude-cube/paused` exists, the bridge keeps off the serial port and the cube shows "Waiting for Mac".
+`flash.sh` and `snap.py` create it while they use the port and delete it afterwards. Another firmware project on the
+same board can create it to keep the bridge away for as long as it needs, and must delete it to hand the cube back.
+The bridge notes each pause and resume in `~/.claude-cube/bridge.log`, and `bridge.py --status` shows how long it has
+been paused.
 
 `flash.sh` builds with PlatformIO but flashes with esptool v5: PlatformIO's bundled esptool 4.5.1 loses the CoreS3's
 native USB right after its stub starts ("No serial data received").
