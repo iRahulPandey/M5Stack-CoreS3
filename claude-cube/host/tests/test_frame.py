@@ -4,7 +4,7 @@ import json
 from dataclasses import replace
 
 from claudecube.activity import SessionActivity
-from claudecube.frame import build_frame, encode_frame, significant
+from claudecube.frame import FIRMWARE_LINE_MAX, build_frame, encode_frame, significant
 from claudecube.transcript import TranscriptStats
 
 ACTIVITY = SessionActivity(
@@ -90,3 +90,34 @@ class TestEncodeFrame:
         assert line.count(b"\n") == 1
         assert len(line) < 512
         assert json.loads(line)["title"].startswith("A very long")
+
+    def test_should_stay_under_the_firmware_line_limit_with_worst_case_input(self) -> None:
+        nasty = '"\\' * 60 + "\u65e5\u672c\U0001f680\u00e9" * 60  # quotes and backslashes double when escaped
+        activity = replace(ACTIVITY, tool=nasty, detail=nasty, cwd="/Users/" + nasty, state_since=-1e300)
+        stats = replace(
+            STATS, title=nasty, model="claude-" + nasty, effort=nasty, cwd=nasty, started_at=-1e300,
+            input_tokens=10 ** 40, output_tokens=10 ** 40, cache_read_tokens=10 ** 40, cache_write_tokens=10 ** 40,
+            context_tokens=10 ** 40, context_window=10 ** 40, cost_usd=1e300, turns=10 ** 40, tool_calls=10 ** 40,
+            lines_added=10 ** 40, lines_removed=10 ** 40,
+        )
+        line = encode_frame(build_frame(activity, stats, now=1e300, seq=10 ** 9))
+        assert len(line) < FIRMWARE_LINE_MAX
+        assert line.isascii()
+
+    def test_should_never_send_a_number_json_cannot_hold(self) -> None:
+        frame = build_frame(ACTIVITY, replace(STATS, cost_usd=float("nan")), now=1_042.0, seq=1)
+        assert frame["cost"] == -1
+
+
+class TestAsciiText:
+    def test_should_transliterate_accents_and_typographic_punctuation(self) -> None:
+        frame = build_frame(replace(ACTIVITY, detail="R\u00e9sum\u00e9 \u201cdraft\u201d \u2013 v2\u2026"), STATS, now=1_042.0, seq=1)
+        assert frame["det"] == 'Resume "draft" - v2...'
+
+    def test_should_replace_characters_the_cube_cannot_draw(self) -> None:
+        frame = build_frame(ACTIVITY, replace(STATS, title="\u65e5\u672c\u8a9e notes \U0001f680\ufe0f"), now=1_042.0, seq=1)
+        assert frame["title"] == "??? notes ?"
+
+    def test_should_drop_control_characters(self) -> None:
+        frame = build_frame(replace(ACTIVITY, detail="\x1b[31mred\x1b[0m"), STATS, now=1_042.0, seq=1)
+        assert frame["det"] == "[31mred[0m"
