@@ -50,6 +50,7 @@ def summarize(payload: Mapping[str, object], now: float) -> dict:
         "tool": _short_tool(tool),
         "detail": _detail(tool, tool_input)[:MAX_DETAIL],
         "ntype": _str(payload.get("notification_type")),
+        "tuid": _str(payload.get("tool_use_id")),
     }
 
 

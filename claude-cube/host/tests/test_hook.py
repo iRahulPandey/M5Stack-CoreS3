@@ -54,6 +54,10 @@ class TestSummarize:
         assert out["ntype"] == "permission_prompt"
         assert "message" not in out
 
+    def test_should_carry_the_tool_use_id(self) -> None:
+        out = summarize(payload(hook_event_name="PostToolUse", tool_name="Bash", tool_use_id="toolu_01KJwrjx", tool_input={}), now=1.0)
+        assert out["tuid"] == "toolu_01KJwrjx"
+
     def test_should_stamp_the_event_time_and_session(self) -> None:
         out = summarize(payload(hook_event_name="Stop"), now=42.5)
         assert (out["ts"], out["event"], out["sid"]) == (42.5, "Stop", BASE["session_id"])

@@ -241,7 +241,7 @@ class Bridge:
             self.last_event_t = now
         if self._update_pause(now):
             return
-        activity = self._board.active()
+        activity = self._board.active(now)
         stats = self._picker.stats(activity.transcript_path if activity else "", now)
         self._sender.offer(activity, stats, now)
 

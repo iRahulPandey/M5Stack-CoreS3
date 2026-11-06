@@ -1,10 +1,15 @@
 """What each Claude Code session is doing, rebuilt from hook events."""
 from __future__ import annotations
 
+from collections import deque
 from dataclasses import dataclass, replace
-from typing import Dict, Mapping, Optional
+from typing import Deque, Dict, Mapping, Optional
 
 MAX_TS = 4_102_444_800  # 2100-01-01; the hook stamps time.time(), so anything later is corrupt
+ACTIVE_TIMEOUT_S = 10 * 60  # Bash's longest timeout; quieter than this, Claude was interrupted or killed
+STATE_TIMEOUTS_S: Mapping[str, float] = {"thinking": ACTIVE_TIMEOUT_S, "tool": ACTIVE_TIMEOUT_S}
+TOOL_DONE_EVENTS = {"PostToolUse", "PostToolUseFailure"}
+FINISHED_TOOLS_KEPT = 64  # per session, to spot a PreToolUse that arrives after its own PostToolUse
 
 WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"}
 DONE_NOTIFICATIONS = {"idle_prompt"}
@@ -32,6 +37,7 @@ class HookEvent:
     tool: str = ""
     detail: str = ""
     notification_type: str = ""
+    tool_use_id: str = ""
 
     @staticmethod
     def from_dict(raw: Mapping[str, object]) -> Optional["HookEvent"]:
@@ -48,6 +54,7 @@ class HookEvent:
             tool=_str(raw.get("tool")),
             detail=_str(raw.get("detail")),
             notification_type=_str(raw.get("ntype")),
+            tool_use_id=_str(raw.get("tuid")),
         )
 
 
@@ -61,6 +68,7 @@ class SessionActivity:
     detail: str
     state_since: float
     last_ts: float
+    tool_use_id: str = ""
 
 
 class SessionBoard:
@@ -68,47 +76,73 @@ class SessionBoard:
 
     def __init__(self) -> None:
         self._sessions: Dict[str, SessionActivity] = {}
+        self._finished: Dict[str, Deque[str]] = {}
 
     def apply(self, event: HookEvent) -> None:
         current = self._sessions.get(event.session_id)
-        if current is not None and event.ts < current.last_ts:
+        if self._is_stale(event, current):
             return
         next_state = _state_for(event)
         if next_state is None:
             return
-        state, tool, detail = next_state
-        if current is None:
-            self._sessions[event.session_id] = SessionActivity(
-                session_id=event.session_id,
-                transcript_path=event.transcript_path,
-                cwd=event.cwd,
-                state=state,
-                tool=tool,
-                detail=detail,
-                state_since=event.ts,
-                last_ts=event.ts,
-            )
-            return
-        changed = (state, tool) != (current.state, current.tool)
-        self._sessions[event.session_id] = replace(
-            current,
-            transcript_path=event.transcript_path or current.transcript_path,
-            cwd=event.cwd or current.cwd,
-            state=state,
-            tool=tool,
-            detail=detail,
-            state_since=event.ts if changed else current.state_since,
-            last_ts=event.ts,
-        )
+        self._sessions[event.session_id] = _advance(current, event, *next_state)
 
-    def active(self) -> Optional[SessionActivity]:
-        if not self._sessions:
-            return None
-        return max(self._sessions.values(), key=lambda s: s.last_ts)
+    def active(self, now: Optional[float] = None) -> Optional[SessionActivity]:
+        """The session to show, as of `now` when given (so long-silent activity has timed out)."""
+        sessions = [_settled(s, now) if now is not None else s for s in self._sessions.values()]
+        return max(sessions, key=lambda s: s.last_ts, default=None)
 
     def last_event_ts(self) -> Optional[float]:
         active = self.active()
         return active.last_ts if active else None
+
+    def _is_stale(self, event: HookEvent, current: Optional[SessionActivity]) -> bool:
+        """Each hook stamps its own time as it starts, so a PostToolUse can be stamped before its PreToolUse."""
+        finished = self._finished.setdefault(event.session_id, deque(maxlen=FINISHED_TOOLS_KEPT))
+        if event.event == "PreToolUse" and event.tool_use_id and event.tool_use_id in finished:
+            return True  # its PostToolUse already arrived
+        if event.event in TOOL_DONE_EVENTS and event.tool_use_id:
+            finished.append(event.tool_use_id)
+        if current is None or event.ts >= current.last_ts:
+            return False
+        ends_current_tool = event.event in TOOL_DONE_EVENTS and bool(event.tool_use_id) and event.tool_use_id == current.tool_use_id
+        return not ends_current_tool
+
+
+def _advance(current: Optional[SessionActivity], event: HookEvent, state: str, tool: str, detail: str) -> SessionActivity:
+    tool_use_id = event.tool_use_id if state == "tool" else ""
+    if current is None:
+        return SessionActivity(
+            session_id=event.session_id,
+            transcript_path=event.transcript_path,
+            cwd=event.cwd,
+            state=state,
+            tool=tool,
+            detail=detail,
+            state_since=event.ts,
+            last_ts=event.ts,
+            tool_use_id=tool_use_id,
+        )
+    changed = (state, tool) != (current.state, current.tool)
+    return replace(
+        current,
+        transcript_path=event.transcript_path or current.transcript_path,
+        cwd=event.cwd or current.cwd,
+        state=state,
+        tool=tool,
+        detail=detail,
+        state_since=event.ts if changed else current.state_since,
+        last_ts=max(event.ts, current.last_ts),
+        tool_use_id=tool_use_id,
+    )
+
+
+def _settled(activity: SessionActivity, now: float) -> SessionActivity:
+    """Thinking or a tool with no events for too long means Esc or a killed terminal, which send no hook."""
+    timeout = STATE_TIMEOUTS_S.get(activity.state)
+    if timeout is None or now - activity.last_ts < timeout:
+        return activity
+    return replace(activity, state="idle", tool="", detail="", tool_use_id="", state_since=activity.last_ts + timeout)
 
 
 def _state_for(event: HookEvent) -> Optional[tuple[str, str, str]]:
