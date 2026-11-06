@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from claudecube.activity import HookEvent, SessionBoard
 
 SID = "0d07bbb1-8d2b-40a4-81fa-be0a6f707c6f"
@@ -98,3 +100,11 @@ class TestActiveSession:
 
     def test_should_reject_events_without_a_session(self) -> None:
         assert HookEvent.from_dict({"ts": 1.0, "event": "Stop"}) is None
+
+
+@pytest.mark.parametrize(
+    "ts", [float("nan"), float("inf"), -1.0, 1e300, 10 ** 400, True, "1.0"],
+    ids=["nan", "infinity", "negative", "far future", "huge int", "bool", "string"],
+)
+def test_should_reject_events_stamped_with_an_impossible_time(ts: object) -> None:
+    assert HookEvent.from_dict({"ts": ts, "event": "Stop", "sid": SID}) is None

@@ -9,13 +9,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Set
 
-from claudecube.pricing import DEFAULT_CONTEXT_WINDOW, context_window, message_cost
+from claudecube.pricing import DEFAULT_CONTEXT_WINDOW, context_window, message_cost, token_count
 
 log = logging.getLogger(__name__)
 
 SYNTHETIC_MODEL = "<synthetic>"
 SYSTEM_PROMPT_SOURCES = {"system"}
 SUBAGENT_GLOB = "agent-*.jsonl"  # in <session id>/subagents/, next to the main <session id>.jsonl
+LINE_ERRORS = (AttributeError, KeyError, OverflowError, RecursionError, TypeError, ValueError)
 
 
 @dataclass(frozen=True)
@@ -101,8 +102,12 @@ class _Source:
             self.acc = _Accumulator()
         for line in new.lines:
             entry = _parse(line)
-            if entry is not None:
+            if entry is None:
+                continue
+            try:
                 _absorb(self.acc, entry, sidechain=self._sidechain)
+            except LINE_ERRORS:  # a shape the guards below missed: skip the line, keep the rest of the file
+                log.warning("Skipping a transcript line that could not be read", exc_info=True)
 
 
 class _NewLines(NamedTuple):
@@ -146,7 +151,7 @@ def _parse(line: bytes) -> Optional[dict]:
         return None
     try:
         entry = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         log.debug("Skipping malformed transcript line", extra={"length": len(line)})
         return None
     return entry if isinstance(entry, dict) else None
@@ -184,7 +189,7 @@ def _absorb_assistant(acc: _Accumulator, entry: dict, sidechain: bool) -> None:
     if isinstance(msg_id, str):
         acc.responses[msg_id] = _Response(model=model, speed=speed, usage=usage)
 
-    for block in message.get("content") or []:
+    for block in _list(message.get("content")):
         if isinstance(block, dict) and block.get("type") == "tool_use" and isinstance(block.get("id"), str):
             acc.tool_ids.add(block["id"])
 
@@ -194,7 +199,7 @@ def _absorb_assistant(acc: _Accumulator, entry: dict, sidechain: bool) -> None:
     if isinstance(entry.get("effort"), str):
         acc.effort = entry["effort"]
     acc.context_tokens = sum(
-        _int(usage.get(k)) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
+        token_count(usage.get(k)) for k in ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
     )
 
 
@@ -212,19 +217,18 @@ def _absorb_user(acc: _Accumulator, entry: dict, sidechain: bool) -> None:
 def _is_real_prompt(entry: dict) -> bool:
     if entry.get("isMeta") or entry.get("promptSource") in SYSTEM_PROMPT_SOURCES:
         return False
-    content = (entry.get("message") or {}).get("content")
+    message = entry.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
     if isinstance(content, str):
         return not content.lstrip().startswith("<")
-    if isinstance(content, list):
-        kinds = {b.get("type") for b in content if isinstance(b, dict)}
-        return "text" in kinds and "tool_result" not in kinds
-    return False
+    kinds = {b.get("type") for b in _list(content) if isinstance(b, dict) and isinstance(b.get("type"), str)}
+    return "text" in kinds and "tool_result" not in kinds
 
 
 def _changed_lines(result: dict) -> tuple[int, int]:
     added = removed = 0
-    for hunk in result.get("structuredPatch") or []:
-        for line in (hunk.get("lines") if isinstance(hunk, dict) else None) or []:
+    for hunk in _list(result.get("structuredPatch")):
+        for line in _list(hunk.get("lines") if isinstance(hunk, dict) else None):
             if isinstance(line, str) and line.startswith("+"):
                 added += 1
             elif isinstance(line, str) and line.startswith("-"):
@@ -246,10 +250,10 @@ def _snapshot(main: _Accumulator, subagents: List[_Accumulator]) -> TranscriptSt
         title=main.title,
         cwd=main.cwd,
         started_at=main.started_at,
-        input_tokens=sum(_int(r.usage.get("input_tokens")) for r in responses),
-        output_tokens=sum(_int(r.usage.get("output_tokens")) for r in responses),
-        cache_read_tokens=sum(_int(r.usage.get("cache_read_input_tokens")) for r in responses),
-        cache_write_tokens=sum(_int(r.usage.get("cache_creation_input_tokens")) for r in responses),
+        input_tokens=sum(token_count(r.usage.get("input_tokens")) for r in responses),
+        output_tokens=sum(token_count(r.usage.get("output_tokens")) for r in responses),
+        cache_read_tokens=sum(token_count(r.usage.get("cache_read_input_tokens")) for r in responses),
+        cache_write_tokens=sum(token_count(r.usage.get("cache_creation_input_tokens")) for r in responses),
         context_tokens=main.context_tokens,
         context_window=context_window(main.model) if main.model else DEFAULT_CONTEXT_WINDOW,
         cost_usd=sum(known) if known else None,
@@ -265,9 +269,9 @@ def _timestamp(value: object) -> Optional[float]:
         return None
     try:
         return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-    except ValueError:
+    except (ValueError, OverflowError, OSError):
         return None
 
 
-def _int(value: object) -> int:
-    return value if isinstance(value, int) and value > 0 else 0
+def _list(value: object) -> list:
+    return value if isinstance(value, list) else []

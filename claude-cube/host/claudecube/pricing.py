@@ -15,6 +15,7 @@ WRITE_1H_MULTIPLIER = 2.0
 DEFAULT_CACHE_READ_MULTIPLIER = 0.1
 DEFAULT_CONTEXT_WINDOW = 200_000
 HAIKU_5_5_LONG_PROMPT = 100_000
+MAX_TOKENS = 100 * MILLION  # per response; anything bigger is a corrupt transcript line, not usage
 
 _DATE_SUFFIX = re.compile(r"-\d{8}$")
 
@@ -102,9 +103,15 @@ def message_cost(model_id: str, usage: Mapping[str, object], speed: Optional[str
     return dollars * (info.fast_multiplier if speed == "fast" else 1.0)
 
 
+def token_count(value: object) -> int:
+    """A token count from a transcript, or 0 when it is not a plausible one."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return value if 0 < value <= MAX_TOKENS else 0
+
+
 def _count(usage: Mapping[str, object], key: str) -> int:
-    value = usage.get(key)
-    return value if isinstance(value, int) and value > 0 else 0
+    return token_count(usage.get(key))
 
 
 def _cache_writes(usage: Mapping[str, object]) -> tuple[int, int]:

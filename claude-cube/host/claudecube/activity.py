@@ -4,6 +4,8 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Dict, Mapping, Optional
 
+MAX_TS = 4_102_444_800  # 2100-01-01; the hook stamps time.time(), so anything later is corrupt
+
 WAITING_NOTIFICATIONS = {"permission_prompt", "elicitation_dialog", "elicitation_url_dialog", "agent_needs_input"}
 DONE_NOTIFICATIONS = {"idle_prompt"}
 
@@ -35,7 +37,7 @@ class HookEvent:
     def from_dict(raw: Mapping[str, object]) -> Optional["HookEvent"]:
         """Build an event from one line the hook wrote; None when required fields are missing."""
         ts, name, sid = raw.get("ts"), raw.get("event"), raw.get("sid")
-        if not isinstance(ts, (int, float)) or not isinstance(name, str) or not isinstance(sid, str) or not sid:
+        if not _plausible_time(ts) or not isinstance(name, str) or not isinstance(sid, str) or not sid:
             return None
         return HookEvent(
             ts=float(ts),
@@ -123,6 +125,11 @@ def _state_for(event: HookEvent) -> Optional[tuple[str, str, str]]:
         return None
     state = EVENT_STATES.get(event.event)
     return (state, "", "") if state else None
+
+
+def _plausible_time(ts: object) -> bool:
+    """A Unix time the hook could have stamped. The range check also rejects NaN and the infinities."""
+    return isinstance(ts, (int, float)) and not isinstance(ts, bool) and 0 <= ts <= MAX_TS
 
 
 def _str(value: object) -> str:

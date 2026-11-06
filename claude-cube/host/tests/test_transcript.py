@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from claudecube import transcript as transcript_module
 from claudecube.transcript import TranscriptReader
 
 SESSION = "0d07bbb1-8d2b-40a4-81fa-be0a6f707c6f"
@@ -248,3 +250,42 @@ class TestIncrementalReads:
         stats = TranscriptReader(tmp_path / "missing.jsonl").poll()
         assert stats.output_tokens == 0
         assert stats.model is None
+
+
+POISON_ENTRIES = [
+    {"type": "assistant", "message": {"id": "msg_x", "model": "claude-opus-5-5", "usage": {"input_tokens": 1}, "content": 5}},
+    {"type": "assistant", "message": {"id": "msg_x", "model": "claude-opus-5-5", "usage": {"input_tokens": 10 ** 400}}},
+    {"type": "assistant", "message": {"id": "msg_x", "model": "claude-opus-5-5", "usage": {"input_tokens": True}}},
+    {"type": "user", "message": "not an object"},
+    {"type": "user", "message": {"content": [{"type": ["text"]}]}},
+    {"type": "user", "toolUseResult": {"structuredPatch": 5}},
+    {"type": "user", "toolUseResult": {"structuredPatch": [{"lines": 5}]}},
+    {"type": "user", "toolUseResult": {"structuredPatch": "+abc", "type": "create", "content": 5}},
+    {"type": "user", "timestamp": "0001-01-01T00:00:00", "message": {"content": "hi"}},
+    {"type": "custom-title", "customTitle": 5},
+]
+
+
+class TestMalformedInput:
+    @pytest.mark.parametrize("poison", POISON_ENTRIES, ids=range(len(POISON_ENTRIES)))
+    def test_should_skip_a_malformed_line_and_keep_reading(self, transcript: Path, poison: dict) -> None:
+        write_lines(transcript, [poison, assistant("msg_a", input_tokens=0, output_tokens=7)])
+        stats = TranscriptReader(transcript).poll()
+        assert stats.output_tokens == 7
+        assert stats.input_tokens <= 1
+
+    def test_should_skip_json_nested_too_deep_to_parse(self, transcript: Path) -> None:
+        write_lines(transcript, [assistant("msg_a", output_tokens=7)], extra="[" * 100_000 + "\n")
+        assert TranscriptReader(transcript).poll().output_tokens == 7
+
+    def test_should_log_and_skip_a_line_that_breaks_the_parser(
+        self, transcript: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        def broken(result: dict) -> tuple:
+            raise TypeError("unexpected patch shape")
+
+        monkeypatch.setattr(transcript_module, "_changed_lines", broken)
+        write_lines(transcript, [tool_result({"structuredPatch": []}), assistant("msg_a", output_tokens=7)])
+        with caplog.at_level(logging.WARNING):
+            assert TranscriptReader(transcript).poll().output_tokens == 7
+        assert "could not be read" in caplog.text

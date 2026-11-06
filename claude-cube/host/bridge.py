@@ -17,6 +17,7 @@ import os
 import select
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import time
@@ -47,6 +48,7 @@ FALLBACK_MAX_AGE_S = 24 * 3600
 FALLBACK_RESCAN_S = 10.0
 MAX_READERS = 8
 MAX_DATAGRAM = 8192
+ERROR_LOG_INTERVAL_S = 60.0  # a tick that keeps failing logs its traceback at most this often
 NO_BRIDGE_ERRNOS = {errno.ECONNREFUSED, errno.ENOENT}  # same rule as hook.py: anything else means a bridge is there
 
 
@@ -72,11 +74,19 @@ class TranscriptPicker:
         if now - self._fallback_checked < FALLBACK_RESCAN_S:
             return self._fallback
         self._fallback_checked = now
-        candidates = [p for p in PROJECTS_DIR.glob("*/*.jsonl") if p.is_file()]
-        newest = max(candidates, key=lambda p: p.stat().st_mtime, default=None)
-        fresh = newest is not None and now - newest.stat().st_mtime < FALLBACK_MAX_AGE_S
-        self._fallback = str(newest) if fresh else None
+        dated = [(mtime, str(p)) for p in PROJECTS_DIR.glob("*/*.jsonl") for mtime in [_mtime(p)] if mtime is not None]
+        newest = max(dated, default=None)
+        self._fallback = newest[1] if newest and now - newest[0] < FALLBACK_MAX_AGE_S else None
         return self._fallback
+
+
+def _mtime(path: Path) -> Optional[float]:
+    """When a regular file last changed, or None when it is not one, including when it vanished since the glob."""
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return info.st_mtime if stat.S_ISREG(info.st_mode) else None
 
 
 @dataclass(frozen=True)
@@ -159,7 +169,7 @@ def drain_events(sock: socket.socket, board: SessionBoard) -> int:
             return count
         try:
             raw = json.loads(data)
-        except ValueError:
+        except (ValueError, RecursionError):
             continue
         event = HookEvent.from_dict(raw) if isinstance(raw, dict) else None
         if event is not None:
@@ -214,9 +224,19 @@ class Bridge:
         self._picker = TranscriptPicker()
         self._sender = FrameSender(link)
         self._paused_since: Optional[float] = None
+        self._error_logged_t: Optional[float] = None
         self.last_event_t = time.time()
 
     def tick(self, now: float) -> None:
+        """Never raises: one bad input must not take the cube down until the next hook event restarts it."""
+        try:
+            self._tick(now)
+        except Exception:  # noqa: BLE001 - the last line of defence, so it has to catch everything
+            if self._error_logged_t is None or now - self._error_logged_t >= ERROR_LOG_INTERVAL_S:
+                log.exception("Tick failed; carrying on")
+                self._error_logged_t = now
+
+    def _tick(self, now: float) -> None:
         if drain_events(self._sock, self._board):
             self.last_event_t = now
         if self._update_pause(now):

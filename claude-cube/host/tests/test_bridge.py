@@ -15,6 +15,7 @@ from typing import Callable, Iterator
 import pytest
 
 import bridge
+from claudecube.activity import SessionBoard
 from claudecube.transcript import TranscriptStats
 from sockets import fill_queue, listening_socket, stale_socket
 
@@ -261,3 +262,45 @@ class TestFrameSender:
         sender.offer(None, TranscriptStats(turns=1), 1_001.0 + bridge.HEARTBEAT_S)
         assert [f["seq"] for f in link.frames] == [1, 2, 3]
         assert len(saved) == 3
+
+
+class VanishingPath(type(Path())):  # type: ignore[misc]
+    """A glob result whose file is deleted before it can be stat()ed."""
+
+    def is_file(self) -> bool:
+        return True
+
+
+class TestMalformedInput:
+    def test_should_skip_datagrams_nested_too_deep_to_parse(self, running: "bridge.Claim") -> None:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
+            sock.sendto(b"[" * 1_500, str(bridge.SOCKET_PATH))
+        send_event("Stop", 1_000.0)
+        board = SessionBoard()
+        assert bridge.drain_events(running.sock, board) == 1
+        assert board.active() is not None
+
+    def test_should_skip_a_transcript_that_vanishes_during_the_scan(self, state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        project = Path("projects") / "-Users-rahulpandey-Projects-issuetriage"
+        project.mkdir(parents=True)
+        kept = project / "0d07bbb1.jsonl"
+        kept.write_text("", encoding="utf-8")
+
+        class Projects:
+            def glob(self, pattern: str) -> list:
+                return [VanishingPath(project / "gone.jsonl"), kept]
+
+        monkeypatch.setattr(bridge, "PROJECTS_DIR", Projects())
+        assert bridge.TranscriptPicker()._newest(time.time()) == str(kept)
+
+    def test_should_log_a_failing_tick_once_a_minute_and_carry_on(self, running: "bridge.Claim", caplog: pytest.LogCaptureFixture) -> None:
+        class Broken:
+            def stats(self, path: str, now: float) -> TranscriptStats:
+                raise RuntimeError("unexpected transcript shape")
+
+        loop = bridge.Bridge(running.sock, FakeLink())
+        loop._picker = Broken()  # type: ignore[assignment]
+        with caplog.at_level(logging.ERROR, logger="claude-cube"):
+            for now in (1_000.0, 1_000.5, 1_000.0 + bridge.ERROR_LOG_INTERVAL_S):
+                loop.tick(now)
+        assert [r.getMessage() for r in caplog.records].count("Tick failed; carrying on") == 2
