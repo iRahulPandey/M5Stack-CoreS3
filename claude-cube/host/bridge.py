@@ -183,6 +183,7 @@ class FrameSender:
         self._link = link
         self._seq = 0
         self._last_sent: Optional[dict] = None
+        self._last_saved: Optional[dict] = None
         self._last_send_t = 0.0
 
     def reset(self) -> None:
@@ -195,8 +196,11 @@ class FrameSender:
         reconnecting = not self._link.connected  # send straight away after a plug-in or reflash
         if not (reconnecting or key != self._last_sent or now - self._last_send_t >= HEARTBEAT_S):
             return
-        write_last_frame(frame)
-        if self._link.write(encode_frame(frame)):
+        sent = self._link.write(encode_frame(frame))
+        if sent or key != self._last_saved:  # unplugged: rewrite the file only when the frame changes
+            write_last_frame(frame)
+            self._last_saved = key
+        if sent:
             self._seq, self._last_sent, self._last_send_t = self._seq + 1, key, now
 
 

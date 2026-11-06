@@ -15,6 +15,7 @@ from typing import Callable, Iterator
 import pytest
 
 import bridge
+from claudecube.transcript import TranscriptStats
 from sockets import fill_queue, listening_socket, stale_socket
 
 
@@ -230,3 +231,33 @@ class TestStatus:
         monkeypatch.setattr(bridge, "find_port", lambda: None)
         assert bridge.main(["--status"]) == 0
         assert capsys.readouterr().out.splitlines() == ["bridge: not running", "paused: no", "port: no cube found"]
+
+
+class TestFrameSender:
+    @pytest.fixture
+    def saved(self, state_dir: Path, monkeypatch: pytest.MonkeyPatch) -> list:
+        frames: list = []
+        monkeypatch.setattr(bridge, "write_last_frame", frames.append)
+        return frames
+
+    def test_should_not_rewrite_the_last_frame_while_the_cube_is_unplugged(self, saved: list) -> None:
+        sender = bridge.FrameSender(FakeLink(accept=False))
+        for tick in range(10):
+            sender.offer(None, TranscriptStats(), 1_000.0 + tick * bridge.TICK_S)
+        assert len(saved) == 1
+
+    def test_should_save_a_changed_frame_while_the_cube_is_unplugged(self, saved: list) -> None:
+        sender = bridge.FrameSender(FakeLink(accept=False))
+        sender.offer(None, TranscriptStats(), 1_000.0)
+        sender.offer(None, TranscriptStats(output_tokens=120), 1_000.5)
+        assert [f["tout"] for f in saved] == [0, 120]
+
+    def test_should_send_on_change_and_on_the_heartbeat(self, saved: list) -> None:
+        link = FakeLink()
+        sender = bridge.FrameSender(link)
+        sender.offer(None, TranscriptStats(), 1_000.0)
+        sender.offer(None, TranscriptStats(), 1_000.5)
+        sender.offer(None, TranscriptStats(turns=1), 1_001.0)
+        sender.offer(None, TranscriptStats(turns=1), 1_001.0 + bridge.HEARTBEAT_S)
+        assert [f["seq"] for f in link.frames] == [1, 2, 3]
+        assert len(saved) == 3

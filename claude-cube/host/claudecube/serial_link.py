@@ -9,8 +9,9 @@ import plistlib
 import subprocess
 import sys
 import termios
+import time
 import tty
-from typing import Iterator, List, Optional, Tuple
+from typing import Callable, Iterator, List, Optional, Tuple
 from xml.parsers.expat import ExpatError
 
 log = logging.getLogger(__name__)
@@ -20,6 +21,7 @@ PORT_ENV = "CLAUDE_CUBE_PORT"
 ESPRESSIF_VID = 0x303A  # the ESP32-S3's own USB port, which is how the CoreS3 connects
 IOREG_COMMAND = ["ioreg", "-a", "-r", "-c", "IOUSBHostDevice", "-l"]
 IOREG_TIMEOUT_S = 5.0
+RECONNECT_S = 2.0  # how often to look for the cube while it is unplugged
 
 
 def find_port() -> Optional[str]:
@@ -80,25 +82,27 @@ def _read_registry() -> bytes:
 class SerialLink:
     """Opens the port lazily, survives unplugging and reflashing, and never blocks the caller."""
 
-    def __init__(self) -> None:
+    def __init__(self, finder: Optional[PortFinder] = None, clock: Callable[[], float] = time.monotonic) -> None:
         self._fd: Optional[int] = None
         self._port: Optional[str] = None
-        self._finder = PortFinder()
+        self._finder = finder or PortFinder()
+        self._clock = clock
+        self._next_open_t = 0.0
+        self._rest = b""  # the end of a frame that a short write cut off
 
     @property
     def connected(self) -> bool:
         return self._fd is not None
 
     def write(self, data: bytes) -> bool:
+        """Send one frame; False when it was dropped. A frame is never cut short or mixed into another."""
         if self._fd is None and not self._open():
             return False
-        assert self._fd is not None
         try:
             self._drain()
-            os.write(self._fd, data)
-            return True
-        except BlockingIOError:
-            return False  # the cube is not draining its buffer; drop this frame
+            if self._rest and not self._finish():
+                return False  # still sending the previous frame; drop this one
+            return self._start(data)
         except OSError as exc:
             log.warning("Serial write failed, closing port", extra={"port": self._port, "errno": exc.errno})
             self.close()
@@ -111,7 +115,25 @@ class SerialLink:
             except OSError:
                 pass
             log.info("Closed serial port %s", self._port)
-        self._fd, self._port = None, None
+        self._fd, self._port, self._rest = None, None, b""
+
+    def _start(self, data: bytes) -> bool:
+        assert self._fd is not None
+        try:
+            sent = os.write(self._fd, data)
+        except BlockingIOError:
+            return False  # the cube is not draining its buffer; drop this frame
+        self._rest = data[sent:]
+        return True
+
+    def _finish(self) -> bool:
+        assert self._fd is not None
+        try:
+            sent = os.write(self._fd, self._rest)
+        except BlockingIOError:
+            return False
+        self._rest = self._rest[sent:]
+        return not self._rest
 
     def _drain(self) -> None:
         """Discard anything the cube printed, so its log lines never pile up in the tty buffer."""
@@ -123,6 +145,10 @@ class SerialLink:
             pass
 
     def _open(self) -> bool:
+        now = self._clock()
+        if now < self._next_open_t:
+            return False
+        self._next_open_t = now + RECONNECT_S
         port = self._finder.find()
         if port is None:
             return False
