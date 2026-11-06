@@ -158,6 +158,28 @@ void test_should_count_a_slap_right_after_other_handling() {
     TEST_ASSERT_EQUAL_UINT32(1, m.state().slaps);
 }
 
+// On the board, slaps of 4.35 and 6.07 g were missed: the cube was already moving in a hand, so the
+// spike came in the middle of a jolt that had started earlier with gentler motion.
+void test_should_count_a_slap_while_the_cube_is_being_handled() {
+    MotionClassifier m;
+    rest(m, 1000);
+    for (uint32_t t = 0; t < 1200; t += STEP_MS, now += STEP_MS) {
+        bool spike = t >= 600 && t < 620;
+        float x = spike ? 4.0f : 0.5f * sinf(2.0f * PI_F * 3.0f * t / 1000.0f);
+        m.update(x, 0.0f, 1.0f, now);
+    }
+    rest(m, 800);
+    TEST_ASSERT_EQUAL_UINT32(1, m.state().slaps);
+}
+
+void test_should_not_count_a_slow_hard_shake_as_a_slap() {
+    MotionClassifier m;
+    rest(m, 500);
+    shake(m, 2.5f, 2.0f, 1500);  // 2 Hz: the swings come back every 250 ms
+    rest(m, 1000);
+    TEST_ASSERT_EQUAL_UINT32(0, m.state().slaps);
+}
+
 void test_should_not_mistake_the_landing_thud_for_a_slap() {
     MotionClassifier m;
     rest(m, 1000, 0.0f, 1.0f, 0.0f);
@@ -239,6 +261,8 @@ int main() {
     RUN_TEST(test_should_explain_each_hit);
     RUN_TEST(test_should_count_a_slap_even_when_the_cube_keeps_rocking);
     RUN_TEST(test_should_count_a_slap_right_after_other_handling);
+    RUN_TEST(test_should_count_a_slap_while_the_cube_is_being_handled);
+    RUN_TEST(test_should_not_count_a_slow_hard_shake_as_a_slap);
     RUN_TEST(test_should_not_mistake_the_landing_thud_for_a_slap);
     RUN_TEST(test_should_notice_a_toss_and_the_landing);
     RUN_TEST(test_should_ignore_a_dip_too_short_to_be_a_fall);

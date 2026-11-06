@@ -20,9 +20,11 @@ constexpr uint32_t QUIET_BEFORE_MS = 600;    // a hit must follow a still moment
 constexpr uint32_t QUIET_AFTER_MS = 350;     // ...and be followed by one
 // Real slaps on this board peaked at 2.4 to 7.2 g; real taps at 0.5 to 0.8 g (`hits` over serial).
 constexpr float SLAP_G = 2.0f;
-constexpr uint32_t JUDGE_AFTER_MS = 200;     // long enough to see a shake swing back, short enough to feel instant
+constexpr uint32_t JUDGE_AFTER_MS = 300;     // a 2 Hz shake swings back within 250 ms; still feels instant
 constexpr float DROP_SHARE = 0.5f;           // after the spike the signal falls below half of it...
 constexpr float REPEAK_SHARE = 0.6f;         // ...and a slap's ringing never climbs back above this share
+constexpr uint32_t LOOK_BACK_MS = 300;       // nor came anything as strong just before (a shake's last swing)
+constexpr float FOOT_G = 1.0f;               // where a spike's rise begins, looking back from its peak
 constexpr uint32_t LANDING_GRACE_MS = 400;
 
 constexpr float FREE_FALL_G = 0.35f;         // total acceleration this low means it is in the air
@@ -91,6 +93,7 @@ void MotionClassifier::update(float ax, float ay, float az, uint32_t nowMs) {
         trackLean(g);
     }
 
+    trackSpike(dynamic, nowMs);
     trackJolts(dynamic, nowMs);
     trackShake(nowMs);
     classifyImpact(nowMs);
@@ -136,55 +139,89 @@ void MotionClassifier::trackLean(float g) {
     _state.tilted = sqrtf(lx * lx + ly * ly + lz * lz) > TILTED_LEAN;
 }
 
-void MotionClassifier::startJolt(float dynamic, uint32_t nowMs) {
-    _inJolt = true;
-    _joltStartMs = nowMs;
-    _joltPeak = _firstPeak = dynamic;
-    _below = false;
-    _judged = false;
-    _dropped = false;
-    _repeaked = false;
-    _shakeAtStart = _state.shake != ShakeLevel::None;
-    _nearLanding = _state.falling || (_landed && nowMs - _lastLandingMs < LANDING_GRACE_MS);
-    dropCandidate();  // a pending hit followed this soon by more movement was not a hit
+// A slap is one sharp spike of SLAP_G or more, watched on its own whatever else is moving (the cube may
+// be held or rocking). It stands alone on both sides: nothing in the LOOK_BACK_MS before its rise and
+// nothing in the JUDGE_AFTER_MS after its fall comes within REPEAK_SHARE of it. A shake's swings have
+// a neighbour as hard, a push never falls away, and a landing comes after a fall.
+void MotionClassifier::trackSpike(float dynamic, uint32_t nowMs) {
+    if (_spike) {
+        watchSpike(dynamic, nowMs);
+    } else if (dynamic >= SLAP_G) {
+        _spike = true;
+        _spikeStartMs = nowMs;
+        _spikePeak = dynamic;
+        _spikeBefore = strongestBefore(nowMs);
+        _spikeDropped = _spikeRepeaked = false;
+    }
+    remember(dynamic, nowMs);
 }
 
-// The first peak of a jolt, whether the signal then fell away, and whether it came back as strong.
-void MotionClassifier::trackPeaks(float dynamic) {
-    if (dynamic > _joltPeak) _joltPeak = dynamic;
-    if (!_dropped) {
-        if (dynamic > _firstPeak) {
-            _firstPeak = dynamic;
-        } else if (dynamic < DROP_SHARE * _firstPeak) {
-            _dropped = true;
+void MotionClassifier::watchSpike(float dynamic, uint32_t nowMs) {
+    if (!_spikeDropped) {
+        if (dynamic > _spikePeak) {
+            _spikePeak = dynamic;
+        } else if (dynamic < DROP_SHARE * _spikePeak) {
+            _spikeDropped = true;
         }
-    } else if (dynamic >= REPEAK_SHARE * _firstPeak) {
-        _repeaked = true;  // swinging back as hard: a shake, not a slap
+    } else if (dynamic >= REPEAK_SHARE * _spikePeak) {
+        _spikeRepeaked = true;
     }
-}
+    if (nowMs - _spikeStartMs < JUDGE_AFTER_MS) return;
 
-// A slap is one sharp spike: strong, never matched again by the ringing after it, not part of a
-// shake and not the thud of a landing. It may come while the cube is held or rocking.
-void MotionClassifier::judgeHardHit(uint32_t durationMs, uint32_t nowMs) {
-    _judged = true;
-    // a toss starts the jolt before the fall is confirmed, so look for a landing now as well
-    _nearLanding |= _state.falling || (_landed && nowMs - _lastLandingMs < LANDING_GRACE_MS);
-    if (!_repeaked && !_shakeAtStart && !_nearLanding) {
-        _state.slaps++;
-        record(HitVerdict::Slap, _firstPeak, durationMs);
+    _spike = false;
+    bool nearLanding = _state.falling || (_landed && nowMs - _lastLandingMs < LANDING_GRACE_MS);
+    if (nearLanding) {
+        record(HitVerdict::Landing, _spikePeak, JUDGE_AFTER_MS);
+    } else if (_spikeRepeaked) {
+        record(HitVerdict::DuringShake, _spikePeak, JUDGE_AFTER_MS);
+    } else if (_spikeBefore >= REPEAK_SHARE * _spikePeak) {
+        record(HitVerdict::NotQuietBefore, _spikePeak, JUDGE_AFTER_MS);
+    } else if (!_spikeDropped) {
+        record(HitVerdict::TooLong, _spikePeak, JUDGE_AFTER_MS);
     } else {
-        record(_nearLanding ? HitVerdict::Landing : HitVerdict::DuringShake, _firstPeak, durationMs);
+        _state.slaps++;
+        record(HitVerdict::Slap, _spikePeak, JUDGE_AFTER_MS);
     }
 }
 
+// The strongest movement in the LOOK_BACK_MS before a spike, leaving out the spike's own rise: walk
+// back to where the signal was last under FOOT_G, then take the largest sample before that.
+float MotionClassifier::strongestBefore(uint32_t nowMs) const {
+    float strongest = 0.0f;
+    bool pastRise = false;
+    for (int i = 1; i <= _historyCount; i++) {
+        int k = (_historyNext - i + HISTORY) % HISTORY;
+        if (nowMs - _historyMs[k] > LOOK_BACK_MS) break;
+        if (!pastRise) {
+            pastRise = _history[k] < FOOT_G;
+        } else if (_history[k] > strongest) {
+            strongest = _history[k];
+        }
+    }
+    return pastRise ? strongest : INFINITY;  // above FOOT_G the whole time: never calm enough
+}
+
+void MotionClassifier::remember(float dynamic, uint32_t nowMs) {
+    _history[_historyNext] = dynamic;
+    _historyMs[_historyNext] = nowMs;
+    _historyNext = (_historyNext + 1) % HISTORY;
+    if (_historyCount < HISTORY) _historyCount++;
+}
+
+// Jolts are for taps: gentle, short, isolated knocks. Anything that reached SLAP_G is the spike
+// tracker's to judge, so it is never a tap.
 void MotionClassifier::trackJolts(float dynamic, uint32_t nowMs) {
     if (!_inJolt) {
-        if (dynamic > JOLT_ON_G) startJolt(dynamic, nowMs);
+        if (dynamic > JOLT_ON_G) {
+            _inJolt = true;
+            _joltStartMs = nowMs;
+            _joltPeak = dynamic;
+            _below = false;
+            dropCandidate();  // a pending tap followed this soon by more movement was not a tap
+        }
         return;
     }
-    trackPeaks(dynamic);
-    bool hard = _firstPeak >= SLAP_G;
-    if (hard && !_judged && nowMs - _joltStartMs >= JUDGE_AFTER_MS) judgeHardHit(JUDGE_AFTER_MS, nowMs);
+    if (dynamic > _joltPeak) _joltPeak = dynamic;
     if (dynamic >= JOLT_OFF_G) {
         _below = false;
         return;
@@ -200,10 +237,8 @@ void MotionClassifier::trackJolts(float dynamic, uint32_t nowMs) {
     bool quietBefore = !_hadJolt || _joltStartMs - _lastJoltEndMs >= QUIET_BEFORE_MS;
     _hadJolt = true;
     _lastJoltEndMs = _belowSinceMs;
-    if (_judged) return;
-    if (hard) {
-        judgeHardHit(durationMs, nowMs);
-    } else if (durationMs > IMPACT_MAX_MS) {
+    if (_joltPeak >= SLAP_G) return;  // judged by the spike tracker
+    if (durationMs > IMPACT_MAX_MS) {
         record(HitVerdict::TooLong, _joltPeak, durationMs);
     } else if (!quietBefore) {
         record(HitVerdict::NotQuietBefore, _joltPeak, durationMs);

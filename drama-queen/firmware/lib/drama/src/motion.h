@@ -47,10 +47,11 @@ private:
     void trackLean(float g);
     void trackFall(float total, uint32_t nowMs);
     void trackPickup(uint32_t nowMs);
+    void trackSpike(float dynamic, uint32_t nowMs);
+    void watchSpike(float dynamic, uint32_t nowMs);
+    float strongestBefore(uint32_t nowMs) const;
+    void remember(float dynamic, uint32_t nowMs);
     void trackJolts(float dynamic, uint32_t nowMs);
-    void startJolt(float dynamic, uint32_t nowMs);
-    void trackPeaks(float dynamic);
-    void judgeHardHit(uint32_t durationMs, uint32_t nowMs);
     void trackShake(uint32_t nowMs);
     void classifyImpact(uint32_t nowMs);
     void record(HitVerdict verdict, float peak, uint32_t durationMs);
@@ -69,12 +70,19 @@ private:
     bool _hadJolt = false;
     uint32_t _lastJoltEndMs = 0;
 
-    float _firstPeak = 0.0f;     // the jolt's first spike, before the signal fell away
-    bool _dropped = false;       // the signal fell below half of the first spike...
-    bool _repeaked = false;      // ...and then came back nearly as strong (a shake)
-    bool _judged = false;        // a hard jolt already counted as a slap, or ruled out
-    bool _shakeAtStart = false;
-    bool _nearLanding = false;
+    bool _spike = false;           // a possible slap being watched...
+    uint32_t _spikeStartMs = 0;
+    float _spikePeak = 0.0f;
+    bool _spikeDropped = false;    // ...the signal fell below half of it...
+    bool _spikeRepeaked = false;   // ...and then came back nearly as strong (a shake)
+    float _spikeBefore = 0.0f;     // the strongest movement just before it rose
+
+    static constexpr int HISTORY = 40;  // recent movement, a little more than the look-back at 100 Hz
+    float _history[HISTORY] = {};
+    uint32_t _historyMs[HISTORY] = {};
+    int _historyNext = 0;
+    int _historyCount = 0;
+
     bool _landed = false;
     uint32_t _lastLandingMs = 0;
 
