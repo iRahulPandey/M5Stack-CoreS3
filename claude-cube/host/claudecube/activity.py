@@ -8,6 +8,7 @@ from typing import Deque, Dict, Mapping, Optional
 MAX_TS = 4_102_444_800  # 2100-01-01; the hook stamps time.time(), so anything later is corrupt
 ACTIVE_TIMEOUT_S = 10 * 60  # Bash's longest timeout; quieter than this, Claude was interrupted or killed
 STATE_TIMEOUTS_S: Mapping[str, float] = {"thinking": ACTIVE_TIMEOUT_S, "tool": ACTIVE_TIMEOUT_S}
+WAITING_PRIORITY_S = 60 * 60  # unanswered this long, a wait is probably a closed terminal: stop putting it first
 TOOL_DONE_EVENTS = {"PostToolUse", "PostToolUseFailure"}
 FINISHED_TOOLS_KEPT = 64  # per session, to spot a PreToolUse that arrives after its own PostToolUse
 
@@ -88,9 +89,10 @@ class SessionBoard:
         self._sessions[event.session_id] = _advance(current, event, *next_state)
 
     def active(self, now: Optional[float] = None) -> Optional[SessionActivity]:
-        """The session to show, as of `now` when given (so long-silent activity has timed out)."""
+        """The session to show: one waiting on the user first, else the latest. With `now`, silent activity times out."""
         sessions = [_settled(s, now) if now is not None else s for s in self._sessions.values()]
-        return max(sessions, key=lambda s: s.last_ts, default=None)
+        waiting = [s for s in sessions if s.state == "waiting" and (now is None or now - s.last_ts < WAITING_PRIORITY_S)]
+        return max(waiting or sessions, key=lambda s: s.last_ts, default=None)
 
     def last_event_ts(self) -> Optional[float]:
         active = self.active()

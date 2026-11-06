@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from claudecube.activity import ACTIVE_TIMEOUT_S, HookEvent, SessionBoard
+from claudecube.activity import ACTIVE_TIMEOUT_S, WAITING_PRIORITY_S, HookEvent, SessionBoard
 
 SID = "0d07bbb1-8d2b-40a4-81fa-be0a6f707c6f"
 OTHER_SID = "7f3c2a10-1b44-4e0e-9a51-2c8d0e6b9f21"
@@ -130,6 +130,44 @@ class TestActiveSession:
         board.apply(event("UserPromptSubmit", 1.0, sid=SID))
         board.apply(event("PreToolUse", 2.0, sid=OTHER_SID, tool="Edit"))
         active = board.active()
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_keep_showing_a_waiting_session_while_another_is_busy(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("PreToolUse", 2.0, sid=OTHER_SID, tool="Edit"),
+            event("PostToolUse", 3.0, sid=OTHER_SID, tool="Edit"),
+        )
+        active = board.active(3.0)
+        assert active is not None
+        assert (active.session_id, active.state) == (SID, "waiting")
+
+    def test_should_follow_the_newest_session_once_the_wait_is_answered(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("PostToolUse", 2.0, sid=SID, tool="Bash"),
+            event("PreToolUse", 3.0, sid=OTHER_SID, tool="Edit"),
+        )
+        active = board.active(3.0)
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_show_the_latest_of_two_waiting_sessions(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("Notification", 2.0, sid=OTHER_SID, ntype="permission_prompt"),
+        )
+        active = board.active(2.0)
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_stop_putting_first_a_wait_unanswered_for_an_hour(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1_000.0, sid=SID, tool="Bash"),
+            event("UserPromptSubmit", 1_000.0 + WAITING_PRIORITY_S, sid=OTHER_SID),
+        )
+        active = board.active(1_000.0 + WAITING_PRIORITY_S + 1)
         assert active is not None
         assert active.session_id == OTHER_SID
 

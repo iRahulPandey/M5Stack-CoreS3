@@ -50,10 +50,11 @@ Claude Code hooks ──> host/hook.py ──(unix socket)──> host/bridge.py
 ```
 
 - `host/hook.py` runs on each hook event as an async hook, so it never slows Claude down. It sends only the
-  event name, tool name and a short label (a file name or the Bash description), never prompts, commands or file contents.
-- `host/bridge.py` starts on the first event, follows whichever session was active most recently, reads token
-  usage from its transcript and its subagents' transcripts, and sends a frame on every change plus a heartbeat every
-  2 s. It exits after 3 idle hours.
+  event name, tool name, tool call id and a short label (a file name or the Bash description), never prompts,
+  commands or file contents.
+- `host/bridge.py` starts on the first event and follows whichever session was active most recently, except that a
+  session waiting on you comes first for up to an hour. It reads token usage from that session's transcript and its
+  subagents' transcripts, and sends a frame on every change plus a heartbeat every 2 s. It exits after 3 idle hours.
 - Pressing Esc or closing a terminal sends no hook event, so a session that has been thinking or running a tool with
   no events for 10 minutes shows as Idle.
 - The cost figure uses API list prices (see `host/claudecube/pricing.py`); on a subscription plan it is an estimate of
