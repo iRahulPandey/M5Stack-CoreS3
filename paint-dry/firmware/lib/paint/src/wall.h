@@ -33,6 +33,7 @@ public:
     Wall(int width, int height, uint32_t seed = 1, float dryingS = DEFAULT_DRYING_S);
 
     void advance(float seconds);
+    void jumpTo(float elapsedS);             // to any point of this coat, fingerprints and all
     void restore(int coat, float elapsedS);  // pick up where a saved coat left off
 
     float dryness() const;  // 0 just painted, 1 dry

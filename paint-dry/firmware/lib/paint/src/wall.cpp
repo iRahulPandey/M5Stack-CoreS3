@@ -49,9 +49,14 @@ void Wall::startCoat(int coat) {
     }
 }
 
+void Wall::jumpTo(float elapsedS) {
+    _elapsedS = 0.0f;
+    advance(std::max(elapsedS, 0.0f));
+}
+
 void Wall::restore(int coat, float elapsedS) {
     startCoat(std::max(coat, 1));
-    advance(elapsedS);
+    jumpTo(elapsedS);
 }
 
 // Drips run quickly at first and slow as the paint thickens, coming to rest the moment it turns tacky.

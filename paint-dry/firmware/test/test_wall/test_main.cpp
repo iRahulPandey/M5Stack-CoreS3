@@ -124,6 +124,19 @@ void test_should_let_drips_creep_while_wet_and_stop_once_tacky() {
     }
 }
 
+// On the board, jumping ahead for screenshots wiped the fingerprints: a time jump is not a new coat.
+void test_should_keep_fingerprints_when_jumping_through_time() {
+    Wall wall(W, H);
+    wall.touch(100, 80);
+    wall.jumpTo(50 * 60);
+    TEST_ASSERT_EQUAL(Stage::Tacky, wall.stage());
+    TEST_ASSERT_EQUAL_UINT32(1, wall.smudges().size());
+    TEST_ASSERT_EQUAL_INT(1, wall.coat());
+    wall.jumpTo(0);
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, wall.dryness());
+    TEST_ASSERT_EQUAL_FLOAT(0.0f, wall.drips()[0].length);
+}
+
 void test_should_pick_up_a_saved_coat_where_it_left_off() {
     Wall original(W, H, 7);
     wait(original, DRYING);
@@ -151,6 +164,7 @@ int main() {
     RUN_TEST(test_should_start_another_coat_when_tapped_dry);
     RUN_TEST(test_should_keep_only_the_latest_fingerprints);
     RUN_TEST(test_should_let_drips_creep_while_wet_and_stop_once_tacky);
+    RUN_TEST(test_should_keep_fingerprints_when_jumping_through_time);
     RUN_TEST(test_should_pick_up_a_saved_coat_where_it_left_off);
     return UNITY_END();
 }
