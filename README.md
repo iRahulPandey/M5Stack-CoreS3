@@ -10,6 +10,7 @@ a 320 × 240 touch screen, camera, IMU, microphones and speaker, on native USB.
 | [drama-queen](drama-queen/) | A cube that overreacts to everything: screams when tossed, sobs face down, faints on her back, calls her lawyer when slapped. 18 reactions with faces, speech bubbles and a gibberish voice. |
 | [balance-ball](balance-ball/) | Tilt the board to keep a ball in the middle of the screen. It worries as a wall gets close and turns red and angry when it hits one; tap the screen to set level. No sound. |
 | [sandbox](sandbox/) | A falling-sand box: draw sand, water and walls with your finger, and gravity follows the way you hold the board. Shake to stir. No sound. |
+| [paint-dry](paint-dry/) | A boring app, on purpose: a freshly painted wall that dries in real time over three hours. Touch it while wet and your fingerprint stays. No sound. |
 
 ## Working with the board
 
