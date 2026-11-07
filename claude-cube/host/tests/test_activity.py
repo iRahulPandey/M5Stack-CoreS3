@@ -1,13 +1,17 @@
 from __future__ import annotations
 
-from claudecube.activity import HookEvent, SessionBoard
+import pytest
+
+from claudecube.activity import ACTIVE_TIMEOUT_S, WAITING_PRIORITY_S, HookEvent, SessionBoard
 
 SID = "0d07bbb1-8d2b-40a4-81fa-be0a6f707c6f"
 OTHER_SID = "7f3c2a10-1b44-4e0e-9a51-2c8d0e6b9f21"
 TRANSCRIPT = f"/Users/rahulpandey/.claude/projects/-Users-rahulpandey-Projects-issuetriage/{SID}.jsonl"
 
 
-def event(name: str, ts: float, *, sid: str = SID, tool: str = "", detail: str = "", ntype: str = "") -> HookEvent:
+def event(
+    name: str, ts: float, *, sid: str = SID, tool: str = "", detail: str = "", ntype: str = "", tuid: str = ""
+) -> HookEvent:
     return HookEvent(
         ts=ts,
         event=name,
@@ -17,14 +21,19 @@ def event(name: str, ts: float, *, sid: str = SID, tool: str = "", detail: str =
         tool=tool,
         detail=detail,
         notification_type=ntype,
+        tool_use_id=tuid,
     )
 
 
-def state_after(*events: HookEvent) -> str:
+def board_after(*events: HookEvent) -> SessionBoard:
     board = SessionBoard()
     for e in events:
         board.apply(e)
-    active = board.active()
+    return board
+
+
+def state_after(*events: HookEvent, now: "float | None" = None) -> str:
+    active = board_after(*events).active(now)
     assert active is not None
     return active.state
 
@@ -78,12 +87,87 @@ class TestOrdering:
         assert active.state_since == 1.0
 
 
+class TestToolUseIds:
+    def test_should_finish_a_tool_whose_post_event_was_stamped_before_its_pre_event(self) -> None:
+        pre = event("PreToolUse", 2.0, tool="Bash", tuid="toolu_01")
+        post = event("PostToolUse", 1.9, tool="Bash", tuid="toolu_01")
+        assert state_after(pre, post) == "thinking"
+
+    def test_should_ignore_a_pre_event_that_arrives_after_its_post_event(self) -> None:
+        post = event("PostToolUse", 1.9, tool="Bash", tuid="toolu_01")
+        pre = event("PreToolUse", 2.0, tool="Bash", tuid="toolu_01")
+        assert state_after(post, pre) == "thinking"
+
+    def test_should_not_let_an_older_post_event_finish_another_tool(self) -> None:
+        running = event("PreToolUse", 2.0, tool="Read", tuid="toolu_02")
+        older = event("PostToolUse", 1.9, tool="Bash", tuid="toolu_01")
+        assert state_after(running, older) == "tool"
+
+
+class TestTimeouts:
+    def test_should_keep_thinking_while_events_are_recent(self) -> None:
+        assert state_after(event("UserPromptSubmit", 1_000.0), now=1_000.0 + ACTIVE_TIMEOUT_S - 1) == "thinking"
+
+    def test_should_go_idle_after_thinking_with_no_events(self) -> None:
+        board = board_after(event("UserPromptSubmit", 1_000.0))
+        active = board.active(1_000.0 + ACTIVE_TIMEOUT_S + 5)
+        assert active is not None
+        assert (active.state, active.state_since) == ("idle", 1_000.0 + ACTIVE_TIMEOUT_S)
+
+    def test_should_go_idle_after_a_tool_with_no_events(self) -> None:
+        board = board_after(event("PreToolUse", 1_000.0, tool="Bash", detail="Build firmware"))
+        active = board.active(1_000.0 + ACTIVE_TIMEOUT_S)
+        assert active is not None
+        assert (active.state, active.tool, active.detail) == ("idle", "", "")
+
+    def test_should_keep_a_finished_turn_however_old(self) -> None:
+        assert state_after(event("Stop", 1_000.0), now=1_000.0 + 86_400) == "done"
+
+
 class TestActiveSession:
     def test_should_follow_the_most_recently_active_session(self) -> None:
         board = SessionBoard()
         board.apply(event("UserPromptSubmit", 1.0, sid=SID))
         board.apply(event("PreToolUse", 2.0, sid=OTHER_SID, tool="Edit"))
         active = board.active()
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_keep_showing_a_waiting_session_while_another_is_busy(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("PreToolUse", 2.0, sid=OTHER_SID, tool="Edit"),
+            event("PostToolUse", 3.0, sid=OTHER_SID, tool="Edit"),
+        )
+        active = board.active(3.0)
+        assert active is not None
+        assert (active.session_id, active.state) == (SID, "waiting")
+
+    def test_should_follow_the_newest_session_once_the_wait_is_answered(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("PostToolUse", 2.0, sid=SID, tool="Bash"),
+            event("PreToolUse", 3.0, sid=OTHER_SID, tool="Edit"),
+        )
+        active = board.active(3.0)
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_show_the_latest_of_two_waiting_sessions(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1.0, sid=SID, tool="Bash"),
+            event("Notification", 2.0, sid=OTHER_SID, ntype="permission_prompt"),
+        )
+        active = board.active(2.0)
+        assert active is not None
+        assert active.session_id == OTHER_SID
+
+    def test_should_stop_putting_first_a_wait_unanswered_for_an_hour(self) -> None:
+        board = board_after(
+            event("PermissionRequest", 1_000.0, sid=SID, tool="Bash"),
+            event("UserPromptSubmit", 1_000.0 + WAITING_PRIORITY_S, sid=OTHER_SID),
+        )
+        active = board.active(1_000.0 + WAITING_PRIORITY_S + 1)
         assert active is not None
         assert active.session_id == OTHER_SID
 
@@ -98,3 +182,11 @@ class TestActiveSession:
 
     def test_should_reject_events_without_a_session(self) -> None:
         assert HookEvent.from_dict({"ts": 1.0, "event": "Stop"}) is None
+
+
+@pytest.mark.parametrize(
+    "ts", [float("nan"), float("inf"), -1.0, 1e300, 10 ** 400, True, "1.0"],
+    ids=["nan", "infinity", "negative", "far future", "huge int", "bool", "string"],
+)
+def test_should_reject_events_stamped_with_an_impossible_time(ts: object) -> None:
+    assert HookEvent.from_dict({"ts": ts, "event": "Stop", "sid": SID}) is None

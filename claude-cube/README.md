@@ -50,9 +50,13 @@ Claude Code hooks ──> host/hook.py ──(unix socket)──> host/bridge.py
 ```
 
 - `host/hook.py` runs on each hook event as an async hook, so it never slows Claude down. It sends only the
-  event name, tool name and a short label (a file name or the Bash description), never prompts, commands or file contents.
-- `host/bridge.py` starts on the first event, follows whichever session was active most recently, reads token
-  usage from its transcript, and sends a frame on every change plus a heartbeat every 2 s. It exits after 3 idle hours.
+  event name, tool name, tool call id and a short label (a file name or the Bash description), never prompts,
+  commands or file contents.
+- `host/bridge.py` starts on the first event and follows whichever session was active most recently, except that a
+  session waiting on you comes first for up to an hour. It reads token usage from that session's transcript and its
+  subagents' transcripts, and sends a frame on every change plus a heartbeat every 2 s. It exits after 3 idle hours.
+- Pressing Esc or closing a terminal sends no hook event, so a session that has been thinking or running a tool with
+  no events for 10 minutes shows as Idle.
 - The cost figure uses API list prices (see `host/claudecube/pricing.py`); on a subscription plan it is an estimate of
   what the same tokens would cost on the API, not a bill.
 
@@ -83,6 +87,9 @@ firmware/flash.sh
 # What the cube is showing right now, without the cube
 cat ~/.claude-cube/last-frame.json
 
+# Is the bridge running or paused, and which port would it use?
+/usr/bin/python3 host/bridge.py --status
+
 # Stop the bridge (the next hook event starts it again)
 /usr/bin/python3 host/bridge.py --stop
 
@@ -90,11 +97,19 @@ cat ~/.claude-cube/last-frame.json
 cd host && uvx --python /usr/bin/python3 pytest -q
 ```
 
+While `~/.claude-cube/paused` exists, the bridge keeps off the serial port and the cube shows "Waiting for Mac".
+`flash.sh` and `snap.py` create it while they use the port and delete it afterwards. Another firmware project on the
+same board can create it to keep the bridge away for as long as it needs, and must delete it to hand the cube back.
+The bridge notes each pause and resume in `~/.claude-cube/bridge.log`, and `bridge.py --status` shows how long it has
+been paused.
+
 `flash.sh` builds with PlatformIO but flashes with esptool v5: PlatformIO's bundled esptool 4.5.1 loses the CoreS3's
 native USB right after its stub starts ("No serial data received").
 
 Set `CLAUDE_CUBE_DISABLE=1` (for example in the `env` block of `~/.claude/settings.json`) to make the hook do nothing,
-or `CLAUDE_CUBE_PORT` to pick a serial port other than the first `/dev/cu.usbmodem*`.
+or `CLAUDE_CUBE_PORT` to pick the serial port yourself. Otherwise the bridge, `flash.sh` and `snap.py` use the first
+USB serial port whose device has Espressif's vendor id (0x303a), found with `ioreg`, so other boards and serial
+monitors on other ports are left alone.
 
 ## Install and uninstall
 

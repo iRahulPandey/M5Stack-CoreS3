@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import errno
+import io
 import json
+import sys
+from pathlib import Path
 
+import pytest
+
+import hook
 from hook import summarize
+from sockets import fill_queue, listening_socket, stale_socket
 
 BASE = {
     "session_id": "0d07bbb1-8d2b-40a4-81fa-be0a6f707c6f",
@@ -46,6 +54,83 @@ class TestSummarize:
         assert out["ntype"] == "permission_prompt"
         assert "message" not in out
 
+    def test_should_carry_the_tool_use_id(self) -> None:
+        out = summarize(payload(hook_event_name="PostToolUse", tool_name="Bash", tool_use_id="toolu_01KJwrjx", tool_input={}), now=1.0)
+        assert out["tuid"] == "toolu_01KJwrjx"
+
     def test_should_stamp_the_event_time_and_session(self) -> None:
         out = summarize(payload(hook_event_name="Stop"), now=42.5)
         assert (out["ts"], out["event"], out["sid"]) == (42.5, "Stop", BASE["session_id"])
+
+
+@pytest.fixture
+def bridge_socket(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A relative socket path: absolute temp paths can pass the 104-byte limit on macOS."""
+    monkeypatch.chdir(tmp_path)
+    path = Path("bridge.sock")
+    monkeypatch.setattr(hook, "SOCKET_PATH", path)
+    monkeypatch.setattr(hook, "RETRY_DELAY_S", 0.0)
+    return path
+
+
+@pytest.fixture
+def started(monkeypatch: pytest.MonkeyPatch) -> list:
+    calls: list = []
+    monkeypatch.setattr(hook, "_start_bridge", lambda: calls.append(True))
+    return calls
+
+
+def run_hook(monkeypatch: pytest.MonkeyPatch, event: dict) -> int:
+    monkeypatch.setattr(sys, "stdin", io.StringIO(json.dumps(event)))
+    return hook.main()
+
+
+class TestDelivery:
+    def test_should_start_a_bridge_when_no_socket_exists(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        assert run_hook(monkeypatch, payload(hook_event_name="Stop")) == 0
+        assert started == [True]
+
+    def test_should_start_a_bridge_when_the_socket_is_stale(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        stale_socket(bridge_socket)
+        run_hook(monkeypatch, payload(hook_event_name="Stop"))
+        assert started == [True]
+
+    def test_should_deliver_to_a_running_bridge(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        with listening_socket(bridge_socket) as server:
+            run_hook(monkeypatch, payload(hook_event_name="Stop"))
+            assert json.loads(server.recv(8192))["event"] == "Stop"
+        assert started == []
+
+    @pytest.mark.skipif(sys.platform != "darwin", reason="macOS reports a full datagram queue as ENOBUFS")
+    def test_should_not_start_a_second_bridge_when_the_queue_is_full(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        with listening_socket(bridge_socket):
+            assert fill_queue(bridge_socket) == errno.ENOBUFS
+            run_hook(monkeypatch, payload(hook_event_name="Stop"))
+        assert started == []
+
+    def test_should_not_start_a_bridge_for_a_message_too_big_to_send(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        with listening_socket(bridge_socket):
+            run_hook(monkeypatch, payload(hook_event_name="Stop", cwd="/Users/rahulpandey/" + "deep/" * 2_000))
+        assert started == []
+
+    def test_should_ignore_input_that_is_not_json(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(sys, "stdin", io.StringIO("not json"))
+        assert hook.main() == 0
+        assert started == []
+
+    def test_should_do_nothing_when_disabled(self, bridge_socket: Path, started: list, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("CLAUDE_CUBE_DISABLE", "1")
+        run_hook(monkeypatch, payload(hook_event_name="Stop"))
+        assert started == []
+
+
+class TestStartBridge:
+    def test_should_launch_the_bridge_detached_with_a_log_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        launched: list = []
+        monkeypatch.setattr(hook, "STATE_DIR", tmp_path / "state")
+        monkeypatch.setattr(hook.subprocess, "Popen", lambda args, **kwargs: launched.append((args, kwargs)))
+        hook._start_bridge()
+        (args, kwargs), = launched
+        assert args == [sys.executable, str(hook.BRIDGE)]
+        assert kwargs["start_new_session"] is True
+        assert (tmp_path / "state" / "bridge.log").exists()

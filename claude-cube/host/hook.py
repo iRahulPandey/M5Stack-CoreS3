@@ -7,12 +7,14 @@ name and a short label such as a file name or the Bash description.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import socket
 import subprocess
 import sys
 import time
+from enum import Enum
 from pathlib import Path
 from typing import Mapping
 
@@ -24,6 +26,15 @@ FILE_TOOLS = {"Read", "Edit", "Write", "NotebookEdit", "MultiEdit"}
 DESCRIBED_TOOLS = {"Bash", "Agent", "Task"}
 SEND_RETRIES = 5
 RETRY_DELAY_S = 0.1
+NO_BRIDGE_ERRNOS = {errno.ECONNREFUSED, errno.ENOENT}  # a stale socket file, or none at all
+BUSY_ERRNOS = {errno.ENOBUFS, errno.EAGAIN}  # macOS reports a full datagram queue as ENOBUFS
+
+
+class Delivery(Enum):
+    SENT = "sent"
+    NO_BRIDGE = "no bridge"  # start one
+    BUSY = "busy"  # a bridge is running but has not drained its queue yet; try again shortly
+    DROPPED = "dropped"  # for example too big for one datagram; trying again will not help
 
 
 def summarize(payload: Mapping[str, object], now: float) -> dict:
@@ -39,6 +50,7 @@ def summarize(payload: Mapping[str, object], now: float) -> dict:
         "tool": _short_tool(tool),
         "detail": _detail(tool, tool_input)[:MAX_DETAIL],
         "ntype": _str(payload.get("notification_type")),
+        "tuid": _str(payload.get("tool_use_id")),
     }
 
 
@@ -62,13 +74,15 @@ def _str(value: object) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _send(message: bytes) -> bool:
+def _send(message: bytes) -> Delivery:
     with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sock:
         try:
             sock.sendto(message, str(SOCKET_PATH))
-            return True
-        except OSError:
-            return False
+            return Delivery.SENT
+        except OSError as exc:
+            if exc.errno in NO_BRIDGE_ERRNOS:
+                return Delivery.NO_BRIDGE
+            return Delivery.BUSY if exc.errno in BUSY_ERRNOS else Delivery.DROPPED
 
 
 def _start_bridge() -> None:
@@ -92,13 +106,14 @@ def main() -> int:
     if not isinstance(payload, Mapping) or os.environ.get("CLAUDE_CUBE_DISABLE"):
         return 0
     message = json.dumps(summarize(payload, time.time()), separators=(",", ":")).encode("utf-8")
-    if _send(message):
-        return 0
-    _start_bridge()
+    delivery = _send(message)
+    if delivery is Delivery.NO_BRIDGE:
+        _start_bridge()
     for _ in range(SEND_RETRIES):
-        time.sleep(RETRY_DELAY_S)
-        if _send(message):
+        if delivery in (Delivery.SENT, Delivery.DROPPED):
             break
+        time.sleep(RETRY_DELAY_S)
+        delivery = _send(message)
     return 0
 
 
