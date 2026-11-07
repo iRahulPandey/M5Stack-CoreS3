@@ -9,15 +9,12 @@ namespace sand {
 
 namespace {
 
-constexpr uint8_t MATERIAL_MASK = 0x03;
-constexpr uint8_t MOVED = 0x04;
-constexpr int SHADE_SHIFT = 3;
 constexpr uint32_t SHADES = 32;
 constexpr uint32_t STIR_REACH = 3;  // a stirred grain jumps up to this many cells
 
 // The eight neighbours, clockwise from the right (y grows down): one turn is 45 degrees.
-constexpr int8_t DX[8] = {1, 1, 0, -1, -1, -1, 0, 1};
-constexpr int8_t DY[8] = {0, 1, 1, 1, 0, -1, -1, -1};
+SAND_TABLE const int8_t DX[8] = {1, 1, 0, -1, -1, -1, 0, 1};
+SAND_TABLE const int8_t DY[8] = {0, 1, 1, 1, 0, -1, -1, -1};
 
 int directionIndex(Direction d) {
     for (int i = 0; i < 8; i++) {
@@ -28,10 +25,6 @@ int directionIndex(Direction d) {
 
 int turn(int direction, int by) {
     return (direction + by + 8) % 8;
-}
-
-Material materialOf(uint8_t c) {
-    return static_cast<Material>(c & MATERIAL_MASK);
 }
 
 bool isLoose(Material m) {
@@ -53,7 +46,7 @@ uint8_t World::shade(int x, int y) const {
 
 // xorshift32: cheap, and unlike a plain LCG its low bits do not repeat in short cycles, which matters
 // for the coin flips that pick a grain's way round an obstacle.
-uint32_t World::random() {
+SAND_HOT uint32_t World::random() {
     _seed ^= _seed << 13;
     _seed ^= _seed >> 17;
     _seed ^= _seed << 5;
@@ -92,7 +85,7 @@ void World::clear() {
 }
 
 // Sweeps from the far side of "down", so a falling column moves as one instead of a grain a step.
-void World::step(Direction down) {
+SAND_HOT void World::step(Direction down) {
     int d = directionIndex(down);
     if (d < 0) return;
     for (uint8_t& c : _cells) c &= static_cast<uint8_t>(~MOVED);
@@ -101,11 +94,15 @@ void World::step(Direction down) {
     bool xBackwards = down.dx > 0 || (down.dx == 0 && _flip);
     for (int i = 0; i < _height; i++) {
         int y = yBackwards ? _height - 1 - i : i;
-        for (int j = 0; j < _width; j++) fall(xBackwards ? _width - 1 - j : j, y, d);
+        const uint8_t* row = &_cells[y * _width];
+        for (int j = 0; j < _width; j++) {
+            int x = xBackwards ? _width - 1 - j : j;
+            if (row[x] != 0) fall(x, y, d);  // most cells are empty: skip them without a call
+        }
     }
 }
 
-void World::fall(int x, int y, int down) {
+SAND_HOT void World::fall(int x, int y, int down) {
     uint8_t c = cell(x, y);
     if (c & MOVED) return;
     Material m = materialOf(c);
@@ -117,22 +114,35 @@ void World::fall(int x, int y, int down) {
     }
 }
 
-bool World::tryEither(int x, int y, int first, int second, bool sinks) {
-    if (random() & 1) std::swap(first, second);
-    return tryMove(x, y, first, sinks) || tryMove(x, y, second, sinks);
+// Most grains in a heap are blocked both ways, so look before flipping a coin.
+SAND_HOT bool World::tryEither(int x, int y, int first, int second, bool sinks) {
+    bool canFirst = canEnter(x, y, first, sinks), canSecond = canEnter(x, y, second, sinks);
+    if (!canFirst && !canSecond) return false;
+    if (canFirst && canSecond && (random() & 1)) std::swap(first, second);
+    move(x, y, canFirst ? first : second);
+    return true;
 }
 
-// Moves the grain at x, y one cell that way if the cell is empty, or swaps it with water there if it
-// `sinks`. Both end up marked as moved for this step.
-bool World::tryMove(int x, int y, int direction, bool sinks) {
+SAND_HOT bool World::tryMove(int x, int y, int direction, bool sinks) {
+    if (!canEnter(x, y, direction, sinks)) return false;
+    move(x, y, direction);
+    return true;
+}
+
+// The cell that way is empty, or holds water and the grain `sinks` through it.
+SAND_HOT bool World::canEnter(int x, int y, int direction, bool sinks) const {
     int nx = x + DX[direction], ny = y + DY[direction];
     if (!inside(nx, ny)) return false;
-    uint8_t target = cell(nx, ny);
-    Material there = materialOf(target);
-    if (there != Material::Empty && !(sinks && there == Material::Water)) return false;
+    Material there = materialOf(cell(nx, ny));
+    return there == Material::Empty || (sinks && there == Material::Water);
+}
+
+// Swaps the grain at x, y with whatever is that way (nothing, or water); both count as moved this step.
+SAND_HOT void World::move(int x, int y, int direction) {
+    int nx = x + DX[direction], ny = y + DY[direction];
+    uint8_t there = cell(nx, ny);
     cell(nx, ny) = cell(x, y) | MOVED;
-    cell(x, y) = there == Material::Empty ? 0 : static_cast<uint8_t>(target | MOVED);
-    return true;
+    cell(x, y) = there == 0 ? 0 : static_cast<uint8_t>(there | MOVED);
 }
 
 void World::stir(int percent) {

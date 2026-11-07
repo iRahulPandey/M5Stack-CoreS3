@@ -4,6 +4,17 @@
 
 #include <vector>
 
+// On the ESP32 the step's inner loop runs from internal RAM: run from flash it shares the instruction
+// cache with the screen-pushing code on the other core, which keeps evicting it.
+#if defined(ESP_PLATFORM)
+#include <esp_attr.h>
+#define SAND_HOT IRAM_ATTR
+#define SAND_TABLE DRAM_ATTR
+#else
+#define SAND_HOT
+#define SAND_TABLE
+#endif
+
 namespace sand {
 
 enum class Material : uint8_t { Empty = 0, Sand = 1, Water = 2, Wall = 3 };
@@ -37,12 +48,23 @@ public:
     void stir(int percent);  // a shake: that share of the loose grains jump to a random nearby empty cell
     int count(Material material) const;
 
+    // The raw cells, row by row, for drawing 17,000 of them fast; decode with materialOf and shadeOf.
+    const uint8_t* cells() const { return _cells.data(); }
+    static Material materialOf(uint8_t cell) { return static_cast<Material>(cell & MATERIAL_MASK); }
+    static uint8_t shadeOf(uint8_t cell) { return cell >> SHADE_SHIFT; }
+
 private:
+    static constexpr uint8_t MATERIAL_MASK = 0x03;
+    static constexpr uint8_t MOVED = 0x04;
+    static constexpr int SHADE_SHIFT = 3;
+
     uint8_t& cell(int x, int y) { return _cells[y * _width + x]; }
     uint8_t cell(int x, int y) const { return _cells[y * _width + x]; }
     bool inside(int x, int y) const { return x >= 0 && y >= 0 && x < _width && y < _height; }
     uint32_t random();
     void put(int x, int y, Material material);
+    bool canEnter(int x, int y, int direction, bool sinks) const;
+    void move(int x, int y, int direction);
     bool tryMove(int x, int y, int direction, bool sinks);
     bool tryEither(int x, int y, int first, int second, bool sinks);
     void fall(int x, int y, int down);
