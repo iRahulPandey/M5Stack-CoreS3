@@ -96,6 +96,17 @@ void test_should_not_flicker_when_it_brushes_past_a_boundary() {
     TEST_ASSERT_EQUAL(Mood::Worried, e.mood());
 }
 
+// On the board, a ball racing from the middle to a wall still looked blissful 5 px from it: every
+// zone it crossed restarted the wait, so no new mood ever got to show.
+void test_should_keep_up_with_a_ball_racing_towards_a_wall() {
+    MoodEngine e;
+    feel(e, MIDDLE, 500);
+    feel(e, A_LITTLE_OFF, 100);
+    feel(e, NEAR_A_WALL, 100);
+    feel(e, RIGHT_BY_A_WALL, 150);
+    TEST_ASSERT_EQUAL(Mood::Panicking, e.mood());
+}
+
 void test_should_time_its_stay_in_the_middle_and_keep_the_best() {
     MoodEngine e;
     feel(e, MIDDLE, 2000);
@@ -138,6 +149,7 @@ int main() {
     RUN_TEST(test_should_fume_when_held_against_the_wall);
     RUN_TEST(test_should_stay_angry_a_moment_then_sulk_until_the_red_fades);
     RUN_TEST(test_should_not_flicker_when_it_brushes_past_a_boundary);
+    RUN_TEST(test_should_keep_up_with_a_ball_racing_towards_a_wall);
     RUN_TEST(test_should_time_its_stay_in_the_middle_and_keep_the_best);
     RUN_TEST(test_should_count_each_bump_once);
     RUN_TEST(test_should_name_every_mood);

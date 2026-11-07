@@ -6,7 +6,6 @@ namespace ball {
 
 namespace {
 
-constexpr float MIDDLE_PX = 16.0f;        // this close to the center counts as in the middle
 constexpr float WORRY_GAP_PX = 45.0f;     // a wall this close is worrying...
 constexpr float PANIC_GAP_PX = 15.0f;     // ...and this close, alarming
 constexpr uint32_t BLISS_AFTER_MS = 3000;
@@ -40,7 +39,7 @@ const char* moodName(Mood mood) {
 bool MoodEngine::update(const Situation& now, uint32_t nowMs) {
     if (!_started) {
         _started = true;
-        _lastMs = _moodSinceMs = _candidateSinceMs = nowMs;
+        _lastMs = _moodSinceMs = nowMs;
     }
     trackStreak(now, nowMs);
     trackTouch(now, nowMs);
@@ -88,21 +87,23 @@ Mood MoodEngine::wanted(const Situation& now, uint32_t nowMs) const {
     return Mood::Content;
 }
 
-// Anger shows at once, and so does its passing; any other change waits until it has lasted SETTLE_MS.
+// Anger shows at once, and so does its passing. Any other change shows once the ball has wanted
+// something other than its current mood for SETTLE_MS, whatever it wants by then: a ball racing
+// across several zones keeps up, and one brushing past a boundary and back does not flicker.
 bool MoodEngine::settle(Mood wanted, uint32_t nowMs) {
     if (wanted == _mood) {
-        _candidate = wanted;
+        _restless = false;
         return false;
     }
     if (!isAnger(wanted) && !isAnger(_mood)) {
-        if (wanted != _candidate) {
-            _candidate = wanted;
-            _candidateSinceMs = nowMs;
-            return false;
+        if (!_restless) {
+            _restless = true;
+            _restlessSinceMs = nowMs;
         }
-        if (nowMs - _candidateSinceMs < SETTLE_MS) return false;
+        if (nowMs - _restlessSinceMs < SETTLE_MS) return false;
     }
-    _mood = _candidate = wanted;
+    _mood = wanted;
+    _restless = false;
     _moodSinceMs = nowMs;
     return true;
 }

@@ -4,6 +4,8 @@
 
 namespace ball {
 
+constexpr float MIDDLE_PX = 16.0f;  // its center this close to the screen's counts as in the middle
+
 enum class Mood : uint8_t { Blissful, Happy, Content, Worried, Panicking, Angry, Fuming, Sulking };
 
 const char* moodName(Mood mood);
@@ -16,7 +18,7 @@ struct Situation {
 
 // How the ball feels about where it is. It wants to be in the middle: the closer a wall gets, the
 // more it worries, and touching one makes it angry and red. Anger lingers, then it sulks while the
-// red fades. Moods other than anger have to last a moment before they show, so the face never flickers.
+// red fades. Calmer changes wait a moment before they show, so the face never flickers.
 class MoodEngine {
 public:
     bool update(const Situation& now, uint32_t nowMs);  // true when the mood changed
@@ -37,8 +39,8 @@ private:
 
     Mood _mood = Mood::Happy;
     uint32_t _moodSinceMs = 0;
-    Mood _candidate = Mood::Happy;
-    uint32_t _candidateSinceMs = 0;
+    bool _restless = false;  // it has wanted a different mood...
+    uint32_t _restlessSinceMs = 0;  // ...since then
 
     bool _started = false;
     uint32_t _lastMs = 0;
